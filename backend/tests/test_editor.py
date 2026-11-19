@@ -99,8 +99,16 @@ def test_editor_end_to_end(sample: Path, tmp_path: Path):
         with sample.open("rb") as fh:
             src = client.post("/api/editor/sources/upload", files={"file": (sample.name, fh, "video/mp4")}).json()
         assert src["has_video"] and src["has_audio"] and src["width"] == 320 and 5.5 < src["duration"] < 6.5
+        assert src["audio_codec"] == "aac"
         assert "path" not in src
         assert client.get(f"/api/editor/sources/{src['id']}/media").status_code == 200
+
+        preview = client.get(f"/api/editor/sources/{src['id']}/preview-audio")
+        assert preview.status_code == 200 and preview.headers["content-type"] == "audio/mpeg"
+        preview_file = tmp_path / "preview.mp3"
+        preview_file.write_bytes(preview.content)
+        info = probe(preview_file)
+        assert info.audio_codec == "mp3" and not info.has_video and 5.5 < info.duration < 6.5
 
         w = 240 * 9 / 16 / 320
         jobs = {

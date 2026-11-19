@@ -104,3 +104,4 @@ class Store:
         if entry and entry.get("kind") == "upload":
             for f in self.uploads.glob(f"{media_id}*"):
                 f.unlink(missing_ok=True)
+        (self.root / "previews" / f"{media_id}.mp3").unlink(missing_ok=True)

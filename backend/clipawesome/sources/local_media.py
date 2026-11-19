@@ -26,6 +26,7 @@ class MediaInfo:
     height: int | None = None
     fps: float | None = None
     title: str | None = None
+    audio_codec: str | None = None
 
 
 def probe(path: Path) -> MediaInfo:
@@ -47,6 +48,7 @@ def probe(path: Path) -> MediaInfo:
             height=vs.codec_context.height if vs is not None else None,
             fps=fps,
             title=title,
+            audio_codec=as_.codec_context.codec.canonical_name if as_ is not None else None,
         )
 
 

@@ -73,6 +73,7 @@ export interface SourceVideo {
   upload_date: string | null;
   media_id: string | null;
   media_kind: "video" | "audio" | null;
+  audio_codec?: string | null;
   transcript_source: string | null;
   language: string | null;
   signals: string[];
@@ -288,6 +289,7 @@ export interface EditSource {
   duration: number;
   has_video: boolean;
   has_audio: boolean;
+  audio_codec: string | null;
   width: number | null;
   height: number | null;
   fps: number | null;

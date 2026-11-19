@@ -2,6 +2,7 @@ import { ExternalLink, FileWarning, Music } from "lucide-react";
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { Ref } from "react";
 import { api } from "../lib/api";
+import { browserDecodes, useCompatAudio } from "../lib/compat-audio";
 import { fmtTime } from "../lib/format";
 import type { SourceVideo } from "../lib/types";
 import { YouTubeMark } from "./ui";
@@ -166,7 +167,12 @@ function LocalPlayer({ source, onTime, ref }: { source: SourceVideo; onTime: (t:
   const media = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const rangeEnd = useRef<number | null>(null);
   const [unsupported, setUnsupported] = useState(false);
-  const src = source.media_id ? api.mediaUrl(source.media_id) : undefined;
+  const previewUrl = source.media_id ? api.mediaPreviewAudioUrl(source.media_id) : null;
+  const [src, setSrc] = useState(() => {
+    const original = source.media_id ? api.mediaUrl(source.media_id) : undefined;
+    return source.media_kind === "audio" && previewUrl && browserDecodes(source.audio_codec) === false ? previewUrl : original;
+  });
+  useCompatAudio(media, previewUrl, { codec: source.audio_codec, enabled: source.media_kind !== "audio" });
 
   useImperativeHandle(
     ref,
@@ -224,7 +230,15 @@ function LocalPlayer({ source, onTime, ref }: { source: SourceVideo; onTime: (t:
             <Music className="size-7 text-fg-2" />
           </div>
         </div>
-        <audio ref={(el) => void (media.current = el)} src={src} controls preload="metadata" onTimeUpdate={onTimeUpdate} className="w-full" />
+        <audio
+          ref={(el) => void (media.current = el)}
+          src={src}
+          controls
+          preload="metadata"
+          onTimeUpdate={onTimeUpdate}
+          onError={() => previewUrl && src !== previewUrl && setSrc(previewUrl)}
+          className="w-full"
+        />
       </div>
     );
   }

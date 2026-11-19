@@ -322,6 +322,18 @@ def media(media_id: str) -> FileResponse:
     return FileResponse(path)
 
 
+@app.get("/api/media/{media_id}/preview-audio")
+def media_preview_audio(media_id: str) -> FileResponse:
+    path = store.media_file(media_id)
+    if path is None:
+        raise HTTPException(404, "Media not found")
+    try:
+        preview = ed.make_preview_audio(path, cfg.data_path("previews", f"{media_id}.mp3"))
+    except ed.EditError as err:
+        raise HTTPException(500, str(err)) from err
+    return FileResponse(preview, media_type="audio/mpeg")
+
+
 # ---- YouTube downloads --------------------------------------------------------------------------
 
 
@@ -442,6 +454,17 @@ def editor_source_media(source_id: str) -> FileResponse:
     if src is None:
         raise HTTPException(404, "Video not found")
     return FileResponse(src.path)
+
+
+@app.get("/api/editor/sources/{source_id}/preview-audio")
+def editor_preview_audio(source_id: str) -> FileResponse:
+    try:
+        path = editor.preview_audio(source_id)
+    except ed.EditError as err:
+        raise HTTPException(500, str(err)) from err
+    if path is None:
+        raise HTTPException(404, "No audio for this video")
+    return FileResponse(path, media_type="audio/mpeg")
 
 
 @app.delete("/api/editor/sources/{source_id}", status_code=204)

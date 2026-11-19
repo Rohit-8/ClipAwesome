@@ -63,6 +63,7 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | GET | `/analyses/{id}` | `Analysis` |
 | DELETE | `/analyses/{id}` | `204` |
 | GET | `/media/{media_id}` | Media stream (supports `Range`) for local sources |
+| GET | `/media/{media_id}/preview-audio` | Cached MP3 copy of the audio for browsers that can't decode the original codec |
 
 ### YouTube downloads
 
@@ -85,6 +86,7 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | GET | `/editor/sources` | — | `[EditSource]` newest first |
 | GET | `/editor/sources/{id}` | — | `EditSource` |
 | GET | `/editor/sources/{id}/media` | — | Media stream (supports `Range`) for the preview |
+| GET | `/editor/sources/{id}/preview-audio` | — | MP3 copy of the audio (generated once, cached) for browsers that can't decode the original codec |
 | DELETE | `/editor/sources/{id}` | — | `204`; `409` while an export from it runs |
 | POST | `/editor/exports` | `{source_id, start, end, crop?: {x,y,w,h} (0–1), rotate: 0\|90\|180\|270, flip_h, flip_v, height?: 2160\|1440\|1080\|720\|480\|360, mute, format: mp4\|mp3\|gif, quality: high\|balanced\|small, fast}` | `202 ExportTask`; `400` with a readable reason (e.g. GIF > 60 s, fast cut with crop) |
 | GET | `/editor/exports` / `/editor/exports/{id}` | — | `ExportTask` — `{id, source_name, label, format, status: queued\|running\|done\|error\|cancelled, progress, speed, eta, file_name, file_size, error, …}` |

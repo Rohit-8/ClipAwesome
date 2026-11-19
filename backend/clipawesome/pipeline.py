@@ -346,6 +346,7 @@ def analyze_local(
         duration=info.duration,
         media_id=media_id,
         media_kind="video" if info.has_video else "audio",
+        audio_codec=info.audio_codec,
         transcript_source=transcript.source if transcript else None,
         language=transcript.language if transcript else None,
     )

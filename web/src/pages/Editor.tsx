@@ -9,6 +9,7 @@ import {
   Download,
   Film,
   ImagePlay,
+  LoaderCircle,
   Pause,
   Play,
   Repeat,
@@ -17,6 +18,8 @@ import {
   Scissors,
   Trash2,
   Undo2,
+  Volume2,
+  VolumeX,
   X,
   Zap,
 } from "lucide-react";
@@ -29,6 +32,7 @@ import { useToast } from "../components/Toast";
 import { TrimBar } from "../components/TrimBar";
 import { Badge, Button, Card, Chip, Field, IconButton, Notice, ProgressBar, Segmented, Select, Toggle } from "../components/ui";
 import { api } from "../lib/api";
+import { browserDecodes, useCompatAudio } from "../lib/compat-audio";
 import { cx, fmtBytes, fmtDuration, relativeTime } from "../lib/format";
 import { navigate, useRoute } from "../lib/router";
 import { formatLength } from "../lib/time";
@@ -258,6 +262,21 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
   const [quality, setQuality] = useState<"high" | "balanced" | "small">("balanced");
   const [fast, setFast] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+
+  const previewUrl = source.has_audio ? api.editorPreviewAudioUrl(source.id) : null;
+  const [mediaSrc, setMediaSrc] = useState(() =>
+    !source.has_video && previewUrl && browserDecodes(source.audio_codec) !== true ? previewUrl : api.editorMediaUrl(source.id),
+  );
+  const compat = useCompatAudio(video, previewUrl, { codec: source.audio_codec, enabled: source.has_video && source.has_audio });
+
+  useEffect(() => {
+    const v = video.current;
+    if (!v) return;
+    v.volume = volume;
+    v.muted = muted;
+  }, [volume, muted]);
 
   const visual = source.has_video && format !== "mp3";
   const cropOn = visual && aspect !== "off";
@@ -401,10 +420,9 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
           >
             <video
               ref={video}
-              src={api.editorMediaUrl(source.id)}
+              src={mediaSrc}
               preload="auto"
               playsInline
-              muted={false}
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
                 if (v.videoWidth && v.videoHeight) setDims({ w: v.videoWidth, h: v.videoHeight });
@@ -416,7 +434,10 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
                 setTime(video.current?.currentTime ?? 0);
               }}
               onSeeked={(e) => setTime(e.currentTarget.currentTime)}
-              onError={() => setMediaError(true)}
+              onError={() => {
+                if (!source.has_video && previewUrl && mediaSrc !== previewUrl) setMediaSrc(previewUrl);
+                else setMediaError(true);
+              }}
               onClick={() => !cropOn && togglePlay()}
               className="absolute inset-0 size-full object-contain"
             />
@@ -446,6 +467,38 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
           <span className="tabular text-[13px] text-fg-2">
             {fmtPrecise(time)} <span className="text-fg-3">/ {fmtPrecise(duration)}</span>
           </span>
+          {source.has_audio && (
+            <div className="flex items-center gap-1.5">
+              <IconButton label={muted ? "Unmute" : "Mute"} onClick={() => setMuted((m) => !m)}>
+                {muted || volume === 0 ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+              </IconButton>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={muted ? 0 : volume}
+                aria-label="Volume"
+                onChange={(e) => {
+                  setVolume(Number(e.target.value));
+                  setMuted(false);
+                }}
+                className="h-1.5 w-20 cursor-pointer appearance-none rounded-full"
+                style={{ background: `linear-gradient(90deg, var(--color-accent) ${(muted ? 0 : volume) * 100}%, rgba(255,255,255,0.12) ${(muted ? 0 : volume) * 100}%)` }}
+              />
+              {compat === "loading" && (
+                <Badge tone="warn" icon={<LoaderCircle className="size-3 animate-spin" />}>
+                  Preparing audio…
+                </Badge>
+              )}
+              {compat === "ready" && (
+                <span title="This browser can't decode the file's audio codec, so an MP3 copy plays in sync. Exports keep the original audio.">
+                  <Badge tone="neutral">Audio via MP3 preview</Badge>
+                </span>
+              )}
+              {compat === "error" && <Badge tone="neg">Audio preview failed</Badge>}
+            </div>
+          )}
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
             <Chip active={loopSel} icon={<Repeat className="size-3.5" />} onClick={() => setLoopSel((v) => !v)}>
               Loop selection
@@ -527,7 +580,7 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
         </ToolSection>
 
         {visual && (
-          <ToolSection title="Crop" hint={cropOn ? "Drag the box on the video; corners resize." : "Pick a shape to crop the frame."}>
+          <ToolSection title="Crop" hint={cropOn ? "Drag inside to move (hold Shift for a straight line). Side bars resize one direction; corners resize both." : "Pick a shape to crop the frame."}>
             <div className="flex flex-wrap gap-1.5">
               {ASPECTS.map((a) => (
                 <Chip key={a.key} active={aspect === a.key} title={a.hint} onClick={() => pickAspect(a.key)} className="h-7 px-2.5 text-[12.5px]">

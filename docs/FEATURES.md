@@ -113,7 +113,8 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 |---|---|---|
 | F11.1 | Open a file | Upload any supported audio/video (progress + cancel), reopen a recent one, or press ✂ on a finished download (no re-upload). |
 | F11.2 | Trim | Drag in/out handles on a timeline, type exact times, or press I / O at the playhead; loop the selection; Space plays. |
-| F11.3 | Crop | Off / Free / 9:16 / 1:1 / 4:5 / 16:9 / 4:3. A draggable, corner-resizable box with live pixel size; aspect stays locked. Coordinates are normalised so they match FFmpeg's auto-rotated frame. |
+| F11.3 | Crop | Off / Free / 9:16 / 1:1 / 4:5 / 16:9 / 4:3. Drag inside to move (Shift = straight line); side bars resize one direction (Free) and corners resize both; aspect stays locked; live pixel size. Coordinates are normalised so they match FFmpeg's auto-rotated frame. |
+| F11.8 | Audio always audible | Volume + mute in the editor. If the browser can't decode the file's audio (e.g. AAC in the VS Code browser, detected from the codec or from zero decoded audio bytes), the server makes a cached 128 kbps CBR MP3 copy and it plays in sync with the video (seek/pause/volume/speed mirrored, drift kept ≈ 30 ms by nudging playback rate). Same fallback in the Results player for local files. Exports always use the original audio. |
 | F11.4 | Rotate, flip, resize | 90° steps, horizontal/vertical flip, downscale to 2160…360p (never upscales). |
 | F11.5 | Outputs | MP4 (H.264 + AAC, High/Balanced/Small quality, optional audio removal), MP3, GIF (≤ 60 s, palette-optimised). Output size is previewed before export. |
 | F11.6 | Fast cut | Trim-only stream copy: instant, original quality, keyframe-aligned. |

@@ -89,6 +89,7 @@ class SourceVideo(BaseModel):
     upload_date: str | None = None
     media_id: str | None = None
     media_kind: Literal["video", "audio"] | None = None
+    audio_codec: str | None = None
     transcript_source: str | None = None
     language: str | None = None
     signals: list[str] = []

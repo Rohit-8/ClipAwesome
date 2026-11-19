@@ -85,6 +85,7 @@ class EditSource(BaseModel):
     duration: float
     has_video: bool
     has_audio: bool
+    audio_codec: str | None = None
     width: int | None = None
     height: int | None = None
     fps: float | None = None
@@ -197,6 +198,32 @@ def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path) -
 
 # ------------------------------------------------------------------ manager
 
+_preview_locks: dict[str, threading.Lock] = {}
+_preview_guard = threading.Lock()
+
+
+def make_preview_audio(src: Path, out: Path) -> Path:
+    """Cached MP3 copy of a file's audio for browsers that can't decode the original codec (e.g. AAC in VS Code)."""
+    with _preview_guard:
+        lock = _preview_locks.setdefault(str(out), threading.Lock())
+    with lock:
+        if out.is_file():
+            return out
+        ffmpeg = ffmpeg_path()
+        if ffmpeg is None:
+            raise EditError("FFmpeg is not available on this server.")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(out.stem + ".tmp.mp3")
+        # Constant bitrate keeps browser seeking accurate, which the A/V sync relies on.
+        cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", str(src),
+               "-map", "0:a:0", "-vn", "-ac", "2", "-ar", "44100", "-c:a", "libmp3lame", "-b:a", "128k", str(tmp)]
+        done = subprocess.run(cmd, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if done.returncode != 0 or not tmp.is_file():
+            tmp.unlink(missing_ok=True)
+            raise EditError("Could not prepare preview audio: " + (done.stderr.strip().splitlines() or ["unknown error"])[-1])
+        tmp.replace(out)
+        return out
+
 
 def _ttl_hours() -> float:
     try:
@@ -298,6 +325,7 @@ class EditorManager:
             duration=info.duration,
             has_video=info.has_video,
             has_audio=info.has_audio,
+            audio_codec=info.audio_codec,
             width=info.width,
             height=info.height,
             fps=info.fps,
@@ -329,7 +357,21 @@ class EditorManager:
         with self._lock:
             self._load()
             src = self._sources.get(source_id)
-        return src if src and Path(src.path).is_file() else None
+        if src is None or not Path(src.path).is_file():
+            return None
+        if src.has_audio and src.audio_codec is None:
+            try:
+                src.audio_codec = probe(Path(src.path)).audio_codec
+                self._save_source(src)
+            except Exception:
+                pass
+        return src
+
+    def preview_audio(self, source_id: str) -> Path | None:
+        src = self.source(source_id)
+        if src is None or not src.has_audio:
+            return None
+        return make_preview_audio(Path(src.path), self._src_dir(source_id) / "preview.mp3")
 
     def delete_source(self, source_id: str) -> bool:
         with self._lock:
