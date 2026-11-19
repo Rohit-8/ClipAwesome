@@ -107,6 +107,18 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 | F10.5 | Retention | `CLIPAWESOME_DOWNLOAD_TTL_HOURS` deletes finished downloads from the server after N hours (24 in Docker, off locally). |
 | F10.6 | Rights notice | Shows the video's licence (Creative Commons badge) and a reminder to download only owned, CC or permitted videos. |
 
+## F11 — Editor (separate page)
+
+| ID | Feature | Acceptance criteria |
+|---|---|---|
+| F11.1 | Open a file | Upload any supported audio/video (progress + cancel), reopen a recent one, or press ✂ on a finished download (no re-upload). |
+| F11.2 | Trim | Drag in/out handles on a timeline, type exact times, or press I / O at the playhead; loop the selection; Space plays. |
+| F11.3 | Crop | Off / Free / 9:16 / 1:1 / 4:5 / 16:9 / 4:3. A draggable, corner-resizable box with live pixel size; aspect stays locked. Coordinates are normalised so they match FFmpeg's auto-rotated frame. |
+| F11.4 | Rotate, flip, resize | 90° steps, horizontal/vertical flip, downscale to 2160…360p (never upscales). |
+| F11.5 | Outputs | MP4 (H.264 + AAC, High/Balanced/Small quality, optional audio removal), MP3, GIF (≤ 60 s, palette-optimised). Output size is previewed before export. |
+| F11.6 | Fast cut | Trim-only stream copy: instant, original quality, keyframe-aligned. |
+| F11.7 | Exports | One export at a time (CPU-friendly); live progress, speed and ETA; cancel; auto-save when done; files expire with `CLIPAWESOME_DOWNLOAD_TTL_HOURS`. |
+
 ## F9 — Platform
 
 | ID | Feature | Acceptance criteria |

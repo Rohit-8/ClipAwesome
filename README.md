@@ -12,6 +12,8 @@ Three ways in:
 
 A separate **Download** page lists every resolution of a YouTube video with its file size and downloads the one you pick (video + audio merged, or audio only). Download only videos you own, that are Creative Commons, or that you have permission to save.
 
+The **Editor** page trims and crops (9:16, 1:1, 4:5, 16:9, free), rotates/flips, resizes, removes audio and exports MP4, MP3 or GIF, with FFmpeg running on the same machine. Finished downloads open in it with one click.
+
 Two analysis modes:
 
 - **Deterministic** — no LLM, no cloud calls. A weighted, explainable scoring formula over measurable signals. Same input, same output.

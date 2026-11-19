@@ -1,4 +1,4 @@
-import { AudioLines, BadgeCheck, CircleX, Clock, Download, ExternalLink, Film, Info, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { AudioLines, BadgeCheck, CircleX, Clock, Download, ExternalLink, Film, Info, Scissors, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Thumb } from "../components/Thumb";
@@ -6,6 +6,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, Card, EmptyState, IconButton, Notice, ProgressBar, YouTubeMark } from "../components/ui";
 import { api } from "../lib/api";
 import { useApp } from "../lib/app-context";
+import { navigate } from "../lib/router";
 import { cx, fmtBytes, fmtDuration, relativeTime } from "../lib/format";
 import type { DownloadInfo, DownloadOption, DownloadTask } from "../lib/types";
 
@@ -115,6 +116,11 @@ function TaskRow({ task, onCancel, onDelete }: { task: DownloadTask; onCancel: (
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
+        {task.status === "done" && (
+          <IconButton label="Edit in Editor" onClick={() => navigate(`editor?download=${task.id}`)}>
+            <Scissors className="size-4" />
+          </IconButton>
+        )}
         {task.status === "done" && (
           <Button size="sm" variant="primary" icon={<Download className="size-3.5" />} onClick={() => saveFile(task)}>
             Save

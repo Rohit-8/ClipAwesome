@@ -279,3 +279,59 @@ export interface DownloadTask {
   created_at: string;
   finished_at: string | null;
 }
+
+export interface EditSource {
+  id: string;
+  name: string;
+  kind: "upload" | "download";
+  download_id: string | null;
+  duration: number;
+  has_video: boolean;
+  has_audio: boolean;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  size: number;
+  created_at: string;
+}
+
+export interface CropBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type ExportFormat = "mp4" | "mp3" | "gif";
+
+export interface ExportRequest {
+  source_id: string;
+  start: number;
+  end: number;
+  crop: CropBox | null;
+  rotate: 0 | 90 | 180 | 270;
+  flip_h: boolean;
+  flip_v: boolean;
+  height: number | null;
+  mute: boolean;
+  format: ExportFormat;
+  quality: "high" | "balanced" | "small";
+  fast: boolean;
+}
+
+export interface ExportTask {
+  id: string;
+  source_id: string;
+  source_name: string;
+  label: string;
+  format: string;
+  status: "queued" | "running" | "done" | "error" | "cancelled";
+  progress: number;
+  speed: number | null;
+  eta: number | null;
+  file_name: string | null;
+  file_size: number | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}

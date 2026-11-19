@@ -6,6 +6,7 @@ import { AppContext } from "./lib/app-context";
 import { useRoute } from "./lib/router";
 import type { CheckResult, Health } from "./lib/types";
 import { DownloadsPage } from "./pages/Downloads";
+import { EditorPage } from "./pages/Editor";
 import { HistoryPage } from "./pages/History";
 import { JobView } from "./pages/JobView";
 import { Results } from "./pages/Results";
@@ -35,6 +36,9 @@ export default function App() {
   else if (head === "download") {
     page = <DownloadsPage />;
     active = "download";
+  } else if (head === "editor") {
+    page = <EditorPage />;
+    active = "editor";
   } else if (head === "history") {
     page = <HistoryPage />;
     active = "history";

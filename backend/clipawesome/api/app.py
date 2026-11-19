@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from .. import __version__, pipeline
 from .. import config as cfg
 from .. import downloads as dl
+from .. import editor as ed
 from ..ai.llm import LLMClient, LLMError
 from ..config import PROVIDER_DEFAULTS, WEB_DIST, AISettings, Settings, SettingsStore, _merge_secret, ensure_dirs, public_settings
 from ..jobs import JobManager
@@ -34,6 +35,7 @@ settings_store = SettingsStore()
 store = Store()
 jobs = JobManager(store)
 downloads = dl.DownloadManager()
+editor = ed.EditorManager()
 
 
 @asynccontextmanager
@@ -385,6 +387,111 @@ def delete_download(task_id: str) -> Response:
 @app.get("/api/downloads/{task_id}/file")
 def download_file(task_id: str) -> FileResponse:
     path = downloads.file_path(task_id)
+    if path is None:
+        raise HTTPException(404, "File not ready")
+    return FileResponse(path, filename=path.name)
+
+
+# ---- editor -------------------------------------------------------------------------------------
+
+
+@app.post("/api/editor/sources/upload")
+async def editor_upload(file: UploadFile = File(...)) -> ed.EditSource:
+    name = Path(file.filename or "video").name
+    if Path(name).suffix.lower() not in MEDIA_EXTS:
+        raise HTTPException(400, f"Unsupported media type '{Path(name).suffix or 'unknown'}'. Supported: {', '.join(sorted(MEDIA_EXTS))}")
+    source_id, path = editor.new_upload_path(name)
+    await _save_upload(file, path)
+    try:
+        return editor.add_source(source_id, path, name, "upload")
+    except ed.EditError as err:
+        editor.delete_source(source_id)
+        path.unlink(missing_ok=True)
+        raise HTTPException(400, str(err)) from err
+
+
+@app.post("/api/editor/sources/from-download")
+def editor_from_download(body: dict[str, str]) -> ed.EditSource:
+    task_id = str(body.get("download_id", ""))
+    task = downloads.get(task_id)
+    path = downloads.file_path(task_id)
+    if task is None or path is None:
+        raise HTTPException(404, "That download is not available (it may have expired)")
+    try:
+        return editor.source_for_download(task_id, path, path.name)
+    except ed.EditError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@app.get("/api/editor/sources")
+def editor_sources() -> list[ed.EditSource]:
+    return editor.sources()
+
+
+@app.get("/api/editor/sources/{source_id}")
+def editor_source(source_id: str) -> ed.EditSource:
+    src = editor.source(source_id)
+    if src is None:
+        raise HTTPException(404, "Video not found (it may have expired)")
+    return src
+
+
+@app.get("/api/editor/sources/{source_id}/media")
+def editor_source_media(source_id: str) -> FileResponse:
+    src = editor.source(source_id)
+    if src is None:
+        raise HTTPException(404, "Video not found")
+    return FileResponse(src.path)
+
+
+@app.delete("/api/editor/sources/{source_id}", status_code=204)
+def editor_delete_source(source_id: str) -> Response:
+    if not editor.delete_source(source_id):
+        raise HTTPException(409, "Video not found, or an export from it is still running")
+    return Response(status_code=204)
+
+
+@app.post("/api/editor/exports", status_code=202)
+def editor_start_export(req: ed.ExportRequest) -> ed.ExportTask:
+    try:
+        return editor.start(req)
+    except ed.EditError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@app.get("/api/editor/exports")
+def editor_exports() -> list[ed.ExportTask]:
+    return editor.exports()
+
+
+@app.get("/api/editor/exports/{task_id}")
+def editor_export(task_id: str) -> ed.ExportTask:
+    task = editor.export(task_id)
+    if task is None:
+        raise HTTPException(404, "Export not found")
+    return task
+
+
+@app.post("/api/editor/exports/{task_id}/cancel")
+def editor_cancel_export(task_id: str) -> ed.ExportTask:
+    task = editor.cancel(task_id)
+    if task is None:
+        raise HTTPException(404, "Export not found")
+    return task
+
+
+@app.delete("/api/editor/exports/{task_id}", status_code=204)
+def editor_delete_export(task_id: str) -> Response:
+    if editor.export(task_id) is None:
+        raise HTTPException(404, "Export not found")
+    if not editor.delete(task_id):
+        raise HTTPException(409, "Cancel the export before deleting it")
+    return Response(status_code=204)
+
+
+@app.get("/api/editor/exports/{task_id}/file")
+def editor_export_file(task_id: str) -> FileResponse:
+    path = editor.file_path(task_id)
     if path is None:
         raise HTTPException(404, "File not ready")
     return FileResponse(path, filename=path.name)

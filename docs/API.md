@@ -76,6 +76,22 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | DELETE | `/downloads/{id}` | — | `204`; `409` while still active |
 | GET | `/downloads/{id}/file` | — | The file as an attachment |
 
+### Editor
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST | `/editor/sources/upload` | multipart `file` | `EditSource` — `{id, name, kind: upload\|download, download_id, duration, has_video, has_audio, width, height, fps, size, created_at}` |
+| POST | `/editor/sources/from-download` | `{download_id}` | `EditSource` (re-uses the downloaded file) |
+| GET | `/editor/sources` | — | `[EditSource]` newest first |
+| GET | `/editor/sources/{id}` | — | `EditSource` |
+| GET | `/editor/sources/{id}/media` | — | Media stream (supports `Range`) for the preview |
+| DELETE | `/editor/sources/{id}` | — | `204`; `409` while an export from it runs |
+| POST | `/editor/exports` | `{source_id, start, end, crop?: {x,y,w,h} (0–1), rotate: 0\|90\|180\|270, flip_h, flip_v, height?: 2160\|1440\|1080\|720\|480\|360, mute, format: mp4\|mp3\|gif, quality: high\|balanced\|small, fast}` | `202 ExportTask`; `400` with a readable reason (e.g. GIF > 60 s, fast cut with crop) |
+| GET | `/editor/exports` / `/editor/exports/{id}` | — | `ExportTask` — `{id, source_name, label, format, status: queued\|running\|done\|error\|cancelled, progress, speed, eta, file_name, file_size, error, …}` |
+| POST | `/editor/exports/{id}/cancel` | — | `ExportTask` |
+| DELETE | `/editor/exports/{id}` | — | `204`; `409` while running |
+| GET | `/editor/exports/{id}/file` | — | The file as an attachment |
+
 `Analysis` (abridged):
 
 ```json

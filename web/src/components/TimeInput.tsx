@@ -52,7 +52,7 @@ export function TimeInput({
               e.currentTarget.blur();
             }
           }}
-          className={cx(inputClass, "pl-10 pr-24 tabular", invalid && "border-neg/60 focus:border-neg/60 focus:ring-neg/15")}
+          className={cx(inputClass, "pl-10 tabular", editing && draft.trim() ? "pr-24" : "pr-3", invalid && "border-neg/60 focus:border-neg/60 focus:ring-neg/15")}
         />
         {editing && draft.trim() && (
           <span className={cx("pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px] tabular", invalid ? "text-neg" : "text-fg-3")}>

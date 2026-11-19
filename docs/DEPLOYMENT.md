@@ -88,7 +88,7 @@ Data such as analyses, uploads, settings, and Whisper models lives in the volume
 docker run --rm -v clipawesome_data:/data -v "$PWD":/backup busybox tar czf /backup/clipawesome-data.tgz -C /data .
 ```
 
-Uploaded videos stay in `/data/uploads` until you delete their analyses in History. YouTube downloads live in `/data/downloads` and are deleted 24 h after finishing (`CLIPAWESOME_DOWNLOAD_TTL_HOURS` in `.env.example`, `0` keeps them). Watch the disk on a shared VM.
+Uploaded videos stay in `/data/uploads` until you delete their analyses in History. YouTube downloads (`/data/downloads`) and Editor uploads/exports (`/data/editor`) are deleted 24 h after finishing (`CLIPAWESOME_DOWNLOAD_TTL_HOURS` in `.env.example`, `0` keeps them). Watch the disk on a shared VM.
 
 ## Resource budget
 

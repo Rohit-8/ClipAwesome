@@ -7,6 +7,9 @@ import type {
   DiscoverRequest,
   DownloadInfo,
   DownloadTask,
+  EditSource,
+  ExportRequest,
+  ExportTask,
   Health,
   Job,
   Settings,
@@ -43,16 +46,38 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     data = text;
   }
   if (!res.ok) {
-    const detail = (data as { detail?: unknown } | null)?.detail;
-    const message =
-      typeof detail === "string"
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map((d: { msg?: string }) => d.msg).join("; ")
-          : `Request failed (${res.status})`;
-    throw new ApiError(message, res.status);
+    throw new ApiError(errorMessage(data, res.status), res.status);
   }
   return data as T;
+}
+
+function errorMessage(data: unknown, status: number): string {
+  const detail = (data as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((d: { msg?: string }) => d.msg).join("; ");
+  return `Request failed (${status})`;
+}
+
+function uploadWithProgress<T>(path: string, form: FormData, onProgress: (fraction: number) => void, signal?: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api${path}`);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let data: unknown = null;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = xhr.responseText;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T);
+      else reject(new ApiError(errorMessage(data, xhr.status), xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError("Upload failed. Is the ClipAwesome server running?", 0));
+    xhr.onabort = () => reject(new ApiError("Upload cancelled", 0));
+    signal?.addEventListener("abort", () => xhr.abort());
+    xhr.send(form);
+  });
 }
 
 export const api = {
@@ -89,4 +114,19 @@ export const api = {
   cancelDownload: (id: string) => request<DownloadTask>("POST", `/downloads/${encodeURIComponent(id)}/cancel`),
   deleteDownload: (id: string) => request<void>("DELETE", `/downloads/${encodeURIComponent(id)}`),
   downloadFileUrl: (id: string) => `/api/downloads/${encodeURIComponent(id)}/file`,
+  editorUpload: (file: File, onProgress: (fraction: number) => void, signal?: AbortSignal) => {
+    const form = new FormData();
+    form.append("file", file);
+    return uploadWithProgress<EditSource>("/editor/sources/upload", form, onProgress, signal);
+  },
+  editorFromDownload: (download_id: string) => request<EditSource>("POST", "/editor/sources/from-download", { download_id }),
+  editorSources: () => request<EditSource[]>("GET", "/editor/sources"),
+  editorSource: (id: string) => request<EditSource>("GET", `/editor/sources/${encodeURIComponent(id)}`),
+  deleteEditorSource: (id: string) => request<void>("DELETE", `/editor/sources/${encodeURIComponent(id)}`),
+  editorMediaUrl: (id: string) => `/api/editor/sources/${encodeURIComponent(id)}/media`,
+  startExport: (req: ExportRequest) => request<ExportTask>("POST", "/editor/exports", req),
+  exports: () => request<ExportTask[]>("GET", "/editor/exports"),
+  cancelExport: (id: string) => request<ExportTask>("POST", `/editor/exports/${encodeURIComponent(id)}/cancel`),
+  deleteExport: (id: string) => request<void>("DELETE", `/editor/exports/${encodeURIComponent(id)}`),
+  exportFileUrl: (id: string) => `/api/editor/exports/${encodeURIComponent(id)}/file`,
 };

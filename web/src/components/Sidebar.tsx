@@ -1,4 +1,4 @@
-import { Download, History, Settings, WandSparkles } from "lucide-react";
+import { Download, History, Scissors, Settings, WandSparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { useApp } from "../lib/app-context";
 import { cx } from "../lib/format";
@@ -7,6 +7,7 @@ import { Logo } from "./ui";
 const NAV = [
   { key: "studio", href: "#/", label: "Studio", icon: <WandSparkles className="size-[18px]" /> },
   { key: "download", href: "#/download", label: "Download", icon: <Download className="size-[18px]" /> },
+  { key: "editor", href: "#/editor", label: "Editor", icon: <Scissors className="size-[18px]" /> },
   { key: "history", href: "#/history", label: "History", icon: <History className="size-[18px]" /> },
   { key: "settings", href: "#/settings", label: "Settings", icon: <Settings className="size-[18px]" /> },
 ];
