@@ -1,0 +1,29 @@
+name: clipawesome
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        INSTALL_TRANSCRIBE: ${CLIPAWESOME_TRANSCRIBE:-true}
+    image: clipawesome:${CLIPAWESOME_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      CLIPAWESOME_AUTH_USER: ${CLIPAWESOME_AUTH_USER:-admin}
+      CLIPAWESOME_AUTH_PASSWORD: ${CLIPAWESOME_AUTH_PASSWORD:?set CLIPAWESOME_AUTH_PASSWORD in .env}
+      CLIPAWESOME_ALLOW_LOCAL_PATH: ${CLIPAWESOME_ALLOW_LOCAL_PATH:-false}
+    ports:
+      # Loopback only: reach it through nginx (shared network) or an SSH tunnel.
+      - "127.0.0.1:${CLIPAWESOME_HOST_PORT:-8096}:8765"
+    volumes:
+      - data:/data
+    mem_limit: ${CLIPAWESOME_MEM_LIMIT:-3g}
+    cpus: ${CLIPAWESOME_CPUS:-2}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  data:

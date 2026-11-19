@@ -10,9 +10,15 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("CLIPAWESOME_DATA") or ROOT / "data")
-WEB_DIST = ROOT / "web" / "dist"
+WEB_DIST = Path(os.environ.get("CLIPAWESOME_WEB_DIST") or ROOT / "web" / "dist")
 HOST = os.environ.get("CLIPAWESOME_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CLIPAWESOME_PORT", "8765"))
+
+# Server deployments: HTTP Basic auth is enforced whenever a password is set.
+AUTH_USER = os.environ.get("CLIPAWESOME_AUTH_USER", "admin")
+AUTH_PASSWORD = os.environ.get("CLIPAWESOME_AUTH_PASSWORD", "")
+# "Analyse by file path" reads the server's filesystem, so deployments turn it off.
+ALLOW_LOCAL_PATH = os.environ.get("CLIPAWESOME_ALLOW_LOCAL_PATH", "true").strip().lower() in ("1", "true", "yes")
 
 MASK = "••••"
 CLEAR = "__clear__"

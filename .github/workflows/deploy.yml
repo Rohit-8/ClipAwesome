@@ -1,0 +1,78 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: clipawesome-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check required secrets
+        env:
+          AUTH_PASSWORD: ${{ secrets.CLIPAWESOME_AUTH_PASSWORD }}
+          VM_HOST: ${{ secrets.VM_HOST_R }}
+        run: |
+          missing=0
+          [ -n "$AUTH_PASSWORD" ] || { echo "::error::Add repository secret CLIPAWESOME_AUTH_PASSWORD"; missing=1; }
+          [ -n "$VM_HOST" ] || { echo "::error::Add repository secrets VM_HOST_R / VM_USERNAME_R / VM_SSH_KEY_R / VM_PORT_R"; missing=1; }
+          exit $missing
+
+      - name: Package source
+        run: git archive --format=tar.gz -o clipawesome-src.tar.gz HEAD
+
+      - name: Copy source to VM
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.VM_HOST_R }}
+          username: ${{ secrets.VM_USERNAME_R }}
+          key: ${{ secrets.VM_SSH_KEY_R }}
+          port: ${{ secrets.VM_PORT_R }}
+          source: clipawesome-src.tar.gz
+          target: /tmp
+
+      - name: Build and deploy on VM
+        uses: appleboy/ssh-action@v1
+        env:
+          CLIPAWESOME_AUTH_USER: ${{ secrets.CLIPAWESOME_AUTH_USER || 'admin' }}
+          CLIPAWESOME_AUTH_PASSWORD: ${{ secrets.CLIPAWESOME_AUTH_PASSWORD }}
+          CLIPAWESOME_DOMAIN: ${{ vars.CLIPAWESOME_DOMAIN }}
+          NGINX_CONTAINER: ${{ vars.NGINX_CONTAINER }}
+          NGINX_NETWORK: ${{ vars.NGINX_NETWORK }}
+          DEPLOY_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.VM_HOST_R }}
+          username: ${{ secrets.VM_USERNAME_R }}
+          key: ${{ secrets.VM_SSH_KEY_R }}
+          port: ${{ secrets.VM_PORT_R }}
+          command_timeout: 40m
+          envs: CLIPAWESOME_AUTH_USER,CLIPAWESOME_AUTH_PASSWORD,CLIPAWESOME_DOMAIN,NGINX_CONTAINER,NGINX_NETWORK,DEPLOY_SHA
+          script: |
+            set -e
+            ARCHIVE=/tmp/clipawesome-src.tar.gz
+            APP_DIR="$HOME/clipawesome"
+            [ -f "$ARCHIVE" ] || { echo "ERROR: $ARCHIVE missing"; exit 1; }
+
+            echo "==> Unpacking ${DEPLOY_SHA}"
+            mkdir -p "$APP_DIR"
+            rm -rf "$APP_DIR/src.new"
+            mkdir "$APP_DIR/src.new"
+            tar -xzf "$ARCHIVE" -C "$APP_DIR/src.new"
+            rm -rf "$APP_DIR/src"
+            mv "$APP_DIR/src.new" "$APP_DIR/src"
+            rm -f "$ARCHIVE"
+
+            bash "$APP_DIR/src/deploy/deploy.sh"

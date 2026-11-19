@@ -44,6 +44,7 @@ Production-style single process: `cd web; npm run build` then `python -m clipawe
 | [docs/API.md](docs/API.md) | REST API contract |
 | [docs/UI_DESIGN.md](docs/UI_DESIGN.md) | Design system and screen inventory |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setup, commands, conventions, troubleshooting |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker image, GitHub Actions deploy to the VM, nginx wiring |
 
 ## Tech stack
 

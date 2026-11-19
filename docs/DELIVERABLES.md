@@ -71,12 +71,20 @@ Checklist of what "done" means for each phase. Feature IDs refer to [FEATURES.md
 - [x] History page (F8)
 - [x] Settings page incl. provider tiles, model list, weights sliders, network check (F7)
 
-## Phase 6 — Next
+## Phase 6 — Deployment
+
+- [x] Basic-auth gate (`CLIPAWESOME_AUTH_PASSWORD`), open `/api/healthz`, server-path analysis switch (tests in `test_deploy_security.py`)
+- [x] Multi-stage `Dockerfile` (web build + Python runtime, non-root, Deno for yt-dlp, health check) and `compose.yaml`
+- [x] GitHub Actions deploy on push to `main` (no tests): archive → VM → native build → health gate → rollback
+- [x] Joins the nginx container's Docker network automatically; optional vhost install via `CLIPAWESOME_DOMAIN`
+- [ ] First deploy to the VM + TLS for the domain
+
+## Phase 7 — Next
 
 - [ ] Live-verify YouTube link + topic flows on a network with YouTube access (or via proxy)
 - [ ] Live-verify AI mode with a real key on the MAQ gateway
 - [ ] Backlog items B1–B7 as prioritised
-- [ ] Desktop packaging and CI
+- [ ] Desktop packaging
 
 ---
 

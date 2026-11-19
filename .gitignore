@@ -12,6 +12,10 @@ web/dist/
 # Runtime data (settings contain secrets)
 data/
 
+# Deployment (generated on the server)
+.env
+compose.proxy.yaml
+
 # OS / editor
 .DS_Store
 Thumbs.db

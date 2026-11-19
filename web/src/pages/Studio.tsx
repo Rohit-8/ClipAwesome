@@ -61,7 +61,7 @@ export function Studio() {
   const [creativeCommons, setCreativeCommons] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [subtitle, setSubtitle] = useState<File | null>(null);
-  const [usePath, setUsePath] = useState(false);
+  const [usePathChoice, setUsePath] = useState(false);
   const [path, setPath] = useState("");
   const [subPath, setSubPath] = useState("");
   const [advanced, setAdvanced] = useState(false);
@@ -71,6 +71,8 @@ export function Studio() {
 
   const aiReady = !!health?.capabilities.ai_configured;
   const hasApiKey = !!health?.capabilities.youtube_api_key;
+  const pathAllowed = health?.capabilities.local_path !== false;
+  const usePath = usePathChoice && pathAllowed;
 
   useEffect(() => {
     api
@@ -279,9 +281,11 @@ export function Studio() {
               ) : (
                 <Dropzone file={file} subtitle={subtitle} onFile={setFile} onSubtitle={setSubtitle} />
               )}
-              <button type="button" onClick={() => setUsePath((v) => !v)} className="text-[12.5px] font-medium text-accent-soft hover:text-white">
-                {usePath ? "Upload a file instead" : "Large file? Use a file path instead"}
-              </button>
+              {pathAllowed && (
+                <button type="button" onClick={() => setUsePath((v) => !v)} className="text-[12.5px] font-medium text-accent-soft hover:text-white">
+                  {usePath ? "Upload a file instead" : "Large file? Use a file path instead"}
+                </button>
+              )}
               {!health?.capabilities.whisper && (
                 <Notice tone="info">Local transcription isn't installed — add a subtitle file for speech-aware results, or install the <code>transcribe</code> extra.</Notice>
               )}

@@ -214,6 +214,7 @@ export interface Health {
     ai_provider: Provider;
     ai_model: string | null;
     youtube_api_key: boolean;
+    local_path: boolean;
   };
 }
 

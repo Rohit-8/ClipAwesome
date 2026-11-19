@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .. import __version__, pipeline
+from .. import config as cfg
 from ..ai.llm import LLMClient, LLMError
 from ..config import PROVIDER_DEFAULTS, WEB_DIST, AISettings, Settings, SettingsStore, _merge_secret, ensure_dirs, public_settings
 from ..jobs import JobManager
@@ -45,6 +49,27 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+PUBLIC_PATHS = {"/api/healthz"}
+
+
+def _authorized(header: str) -> bool:
+    if not header.startswith("Basic "):
+        return False
+    try:
+        user, _, password = base64.b64decode(header[6:], validate=True).decode("utf-8").partition(":")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    return secrets.compare_digest(user.encode(), cfg.AUTH_USER.encode()) & secrets.compare_digest(
+        password.encode(), cfg.AUTH_PASSWORD.encode()
+    )
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if not cfg.AUTH_PASSWORD or request.url.path in PUBLIC_PATHS or _authorized(request.headers.get("authorization", "")):
+        return await call_next(request)
+    return Response("Authentication required", status_code=401, headers={"WWW-Authenticate": 'Basic realm="ClipAwesome", charset="UTF-8"'})
+
 
 def _require_mode(opts: AnalyzeOptions, settings: Settings) -> None:
     if (opts.mode or settings.default_mode) == "ai" and not settings.ai.is_configured():
@@ -68,6 +93,11 @@ def _ai_settings(overrides: dict[str, Any] | None) -> AISettings:
 # ---- system -------------------------------------------------------------------------------------
 
 
+@app.get("/api/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     settings = settings_store.load()
@@ -82,6 +112,7 @@ def health() -> dict[str, Any]:
             "ai_provider": settings.ai.provider,
             "ai_model": settings.ai.resolved_model() or None,
             "youtube_api_key": bool(settings.youtube_api_key),
+            "local_path": cfg.ALLOW_LOCAL_PATH,
         },
     }
 
@@ -212,6 +243,8 @@ async def analyze_local_upload(
 
 @app.post("/api/analyze/local-path", status_code=202)
 def analyze_local_path(req: LocalPathRequest) -> dict[str, str]:
+    if not cfg.ALLOW_LOCAL_PATH:
+        raise HTTPException(403, "Analysing by server file path is disabled on this deployment. Upload the file instead.")
     settings = settings_store.load()
     _require_mode(req, settings)
     path = Path(req.path.strip().strip('"')).expanduser()

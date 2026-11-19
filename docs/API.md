@@ -2,6 +2,8 @@
 
 Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-running work returns `202 {"job_id": "..."}`; poll the job.
 
+**Auth:** when `CLIPAWESOME_AUTH_PASSWORD` is set (always, in deployments) every route except `GET /api/healthz` requires HTTP Basic auth (`CLIPAWESOME_AUTH_USER`, default `admin`); otherwise `401`.
+
 ## Common analysis options (`AnalyzeOptions`)
 
 | Field | Type | Default | Notes |
@@ -19,7 +21,8 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/health` | `{status, version, capabilities: {pyav, whisper, js_runtime, ai_configured, youtube_api_key}}` |
+| GET | `/healthz` | `{status: "ok"}` — unauthenticated liveness probe (container health check) |
+| GET | `/health` | `{status, version, capabilities: {pyav, whisper, js_runtime, ai_configured, youtube_api_key, local_path}}` |
 | GET | `/settings` | `Settings` with secrets masked (`"••••abcd"`) and `has_*` flags |
 | GET | `/settings/defaults` | Default `Settings` |
 | PUT | `/settings` | Saves and returns masked `Settings`. A masked or empty secret keeps the stored value; send `"__clear__"` to delete it. |
@@ -34,7 +37,7 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 |---|---|---|---|
 | POST | `/analyze/youtube` | `{url, ...AnalyzeOptions}` | URL must be a YouTube video URL or ID |
 | POST | `/analyze/local` | multipart: `file`, optional `subtitle`, `options` (JSON string of `AnalyzeOptions`) | Upload |
-| POST | `/analyze/local-path` | `{path, subtitle_path?, ...AnalyzeOptions}` | Absolute path to an existing media file |
+| POST | `/analyze/local-path` | `{path, subtitle_path?, ...AnalyzeOptions}` | Absolute path to an existing media file. `403` when `CLIPAWESOME_ALLOW_LOCAL_PATH=false` (default in Docker). |
 | POST | `/discover` | `{topic, search_limit=15, analyze_top=3, min_duration=180, max_duration=7200, creative_commons=false, ...AnalyzeOptions}` | |
 | GET | `/jobs/{job_id}` | — | `Job` |
 | GET | `/jobs` | — | Recent jobs |
