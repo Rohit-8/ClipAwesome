@@ -96,6 +96,17 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 | F8.1 | Saved analyses | Every completed analysis persists locally and is listed newest-first with thumbnail, type, clip count. |
 | F8.2 | Reopen / delete | Open any past result instantly; delete removes it. |
 
+## F10 — YouTube download (separate page)
+
+| ID | Feature | Acceptance criteria |
+|---|---|---|
+| F10.1 | Format list | Paste a link → one row per resolution (e.g. 2160p … 144p) with container, codec, fps/HDR, pixel size, bitrate and file size (“≈” when YouTube only gives an estimate), plus audio-only M4A and Opus. Per resolution the most compatible stream wins: SDR over HDR, higher fps, then H.264 > VP9 > AV1; audio prefers the original-language stereo track. |
+| F10.2 | Download + merge | Separate video/audio streams are merged without re-encoding (FFmpeg from `imageio-ffmpeg`); MP4 when H.264+AAC, WebM when VP9+Opus, else MKV. Max 2 concurrent downloads. |
+| F10.3 | Progress | Live bytes, speed, ETA and merge stage; cancel removes partial files. |
+| F10.4 | Save | The finished file saves to the browser automatically; the list keeps a Save button, delete, and clear-finished. Downloads survive a server restart. |
+| F10.5 | Retention | `CLIPAWESOME_DOWNLOAD_TTL_HOURS` deletes finished downloads from the server after N hours (24 in Docker, off locally). |
+| F10.6 | Rights notice | Shows the video's licence (Creative Commons badge) and a reminder to download only owned, CC or permitted videos. |
+
 ## F9 — Platform
 
 | ID | Feature | Acceptance criteria |

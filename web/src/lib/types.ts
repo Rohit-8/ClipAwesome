@@ -223,3 +223,59 @@ export interface CheckResult {
   message: string;
   model?: string;
 }
+
+export interface DownloadOption {
+  id: string;
+  kind: "video" | "audio";
+  label: string;
+  quality: string;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  hdr: boolean;
+  ext: string;
+  codec: string;
+  bitrate_kbps: number | null;
+  size: number | null;
+  approx: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface DownloadInfo {
+  video_id: string;
+  url: string;
+  title: string;
+  channel: string | null;
+  duration: number;
+  thumbnail: string | null;
+  license: string | null;
+  creative_commons: boolean;
+  ffmpeg: boolean;
+  options: DownloadOption[];
+}
+
+export type DownloadStatus = "queued" | "downloading" | "merging" | "done" | "error" | "cancelled";
+
+export interface DownloadTask {
+  id: string;
+  video_id: string;
+  title: string;
+  channel: string | null;
+  thumbnail: string | null;
+  option_id: string;
+  label: string;
+  ext: string;
+  status: DownloadStatus;
+  stage: string;
+  progress: number;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  speed: number | null;
+  eta: number | null;
+  file_name: string | null;
+  file_size: number | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}

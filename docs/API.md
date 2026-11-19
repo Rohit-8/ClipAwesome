@@ -64,6 +64,18 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | DELETE | `/analyses/{id}` | `204` |
 | GET | `/media/{media_id}` | Media stream (supports `Range`) for local sources |
 
+### YouTube downloads
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST | `/download/formats` | `{url}` | `DownloadInfo` — `{video_id, url, title, channel, duration, thumbnail, license, creative_commons, ffmpeg, options: [{id, kind: video\|audio, label, quality, width, height, fps, hdr, ext, codec, bitrate_kbps, size, approx, available, reason}]}`. `502` with a readable message when YouTube fails. |
+| POST | `/downloads` | `{url, option_id}` | `202 DownloadTask` |
+| GET | `/downloads` | — | `[DownloadTask]` newest first |
+| GET | `/downloads/{id}` | — | `DownloadTask` — `{id, title, label, ext, status: queued\|downloading\|merging\|done\|error\|cancelled, stage, progress, downloaded_bytes, total_bytes, speed, eta, file_name, file_size, error, …}` |
+| POST | `/downloads/{id}/cancel` | — | `DownloadTask` |
+| DELETE | `/downloads/{id}` | — | `204`; `409` while still active |
+| GET | `/downloads/{id}/file` | — | The file as an attachment |
+
 `Analysis` (abridged):
 
 ```json

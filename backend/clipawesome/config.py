@@ -39,7 +39,7 @@ def data_path(*parts: str) -> Path:
 
 
 def ensure_dirs() -> None:
-    for sub in ("analyses", "uploads", "models", "tmp"):
+    for sub in ("analyses", "uploads", "models", "tmp", "downloads"):
         data_path(sub).mkdir(parents=True, exist_ok=True)
 
 

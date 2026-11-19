@@ -17,6 +17,7 @@ dependencies = [
     "numpy>=1.26",
     "av>=12",
     "yt-dlp[default]>=2025.1.1",
+    "imageio-ffmpeg>=0.5",
 ]
 
 [project.optional-dependencies]

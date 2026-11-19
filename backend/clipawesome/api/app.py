@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from .. import __version__, pipeline
 from .. import config as cfg
+from .. import downloads as dl
 from ..ai.llm import LLMClient, LLMError
 from ..config import PROVIDER_DEFAULTS, WEB_DIST, AISettings, Settings, SettingsStore, _merge_secret, ensure_dirs, public_settings
 from ..jobs import JobManager
@@ -32,6 +33,7 @@ CHUNK = 1024 * 1024
 settings_store = SettingsStore()
 store = Store()
 jobs = JobManager(store)
+downloads = dl.DownloadManager()
 
 
 @asynccontextmanager
@@ -316,6 +318,76 @@ def media(media_id: str) -> FileResponse:
     if path is None:
         raise HTTPException(404, "Media not found")
     return FileResponse(path)
+
+
+# ---- YouTube downloads --------------------------------------------------------------------------
+
+
+def _video_id_or_400(url: str) -> str:
+    video_id = youtube.parse_video_id(url)
+    if not video_id:
+        raise HTTPException(400, "Enter a YouTube video link (youtube.com/watch?v=…, youtu.be/…, /shorts/…) or an 11-character video ID.")
+    return video_id
+
+
+@app.post("/api/download/formats")
+def download_formats(req: dl.DownloadRequest) -> dl.DownloadInfo:
+    try:
+        info, _ = dl.get_formats(_video_id_or_400(req.url), fresh=True)
+    except youtube.SourceError as err:
+        raise HTTPException(502, str(err)) from err
+    return info
+
+
+@app.post("/api/downloads", status_code=202)
+def start_download(req: dl.StartDownloadRequest) -> dl.DownloadTask:
+    video_id = _video_id_or_400(req.url)
+    try:
+        info, options = dl.get_formats(video_id)
+        option = options.get(req.option_id)
+        if option is None:
+            raise HTTPException(400, "That format is no longer offered for this video. Fetch the formats again.")
+        return downloads.start(info, option)
+    except youtube.SourceError as err:
+        raise HTTPException(502, str(err)) from err
+
+
+@app.get("/api/downloads")
+def list_downloads() -> list[dl.DownloadTask]:
+    return downloads.list()
+
+
+@app.get("/api/downloads/{task_id}")
+def get_download(task_id: str) -> dl.DownloadTask:
+    task = downloads.get(task_id)
+    if task is None:
+        raise HTTPException(404, "Download not found")
+    return task
+
+
+@app.post("/api/downloads/{task_id}/cancel")
+def cancel_download(task_id: str) -> dl.DownloadTask:
+    task = downloads.cancel(task_id)
+    if task is None:
+        raise HTTPException(404, "Download not found")
+    return task
+
+
+@app.delete("/api/downloads/{task_id}", status_code=204)
+def delete_download(task_id: str) -> Response:
+    if downloads.get(task_id) is None:
+        raise HTTPException(404, "Download not found")
+    if not downloads.delete(task_id):
+        raise HTTPException(409, "Cancel the download before deleting it")
+    return Response(status_code=204)
+
+
+@app.get("/api/downloads/{task_id}/file")
+def download_file(task_id: str) -> FileResponse:
+    path = downloads.file_path(task_id)
+    if path is None:
+        raise HTTPException(404, "File not ready")
+    return FileResponse(path, filename=path.name)
 
 
 if WEB_DIST.is_dir():

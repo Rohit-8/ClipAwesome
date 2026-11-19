@@ -10,6 +10,8 @@ Three ways in:
 | **Topic** | Searches YouTube for the topic, ranks the videos, deep-analyses the best ones and returns one cross-video list of clip suggestions. |
 | **Local file** | Measures audio energy, detects scene cuts, transcribes speech locally (Whisper) and ranks candidate clips. |
 
+A separate **Download** page lists every resolution of a YouTube video with its file size and downloads the one you pick (video + audio merged, or audio only). Download only videos you own, that are Creative Commons, or that you have permission to save.
+
 Two analysis modes:
 
 - **Deterministic** — no LLM, no cloud calls. A weighted, explainable scoring formula over measurable signals. Same input, same output.

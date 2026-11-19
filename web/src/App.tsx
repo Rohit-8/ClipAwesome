@@ -5,6 +5,7 @@ import { api } from "./lib/api";
 import { AppContext } from "./lib/app-context";
 import { useRoute } from "./lib/router";
 import type { CheckResult, Health } from "./lib/types";
+import { DownloadsPage } from "./pages/Downloads";
 import { HistoryPage } from "./pages/History";
 import { JobView } from "./pages/JobView";
 import { Results } from "./pages/Results";
@@ -31,7 +32,10 @@ export default function App() {
   let active = "studio";
   if (head === "job" && id) page = <JobView key={id} id={id} />;
   else if (head === "analysis" && id) page = <Results key={id} id={id} />;
-  else if (head === "history") {
+  else if (head === "download") {
+    page = <DownloadsPage />;
+    active = "download";
+  } else if (head === "history") {
     page = <HistoryPage />;
     active = "history";
   } else if (head === "settings") {
