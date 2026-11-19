@@ -1,26 +1,26 @@
 # UI Design
 
-Goal: a calm, premium, focused tool. Dark canvas, glass surfaces, one vivid gradient accent used sparingly for primary actions and scores.
+Goal: a calm, premium, focused tool. Solid dark canvas, solid raised surfaces, one solid accent used sparingly for primary actions and scores. No gradients anywhere.
 
 ## Design tokens
 
 | Token | Value | Use |
 |---|---|---|
-| `--color-ink-950` | `#07080c` | App background |
-| `--color-ink-900` | `#0c0e14` | Sidebar |
-| `--color-ink-800` | `#12151d` | Raised surfaces |
-| Surface glass | `white / 3%` + `border white / 7%` + blur | Cards, panels |
-| Text primary | `#eef0f6` | |
-| Text secondary | `#9aa1b4` | |
-| Text muted | `#5e6578` | |
-| Accent gradient | `#8b5cf6 → #6366f1 → #22d3ee` | Primary button, score ring, brand mark |
-| Positive | `#34d399` | Positive reasons |
+| `--color-ink-950` | `#09090b` | App background |
+| `--color-ink-900` | `#0e0f12` | Sidebar, inset panels |
+| `--color-ink-850` | `#121318` | Clip cards |
+| Surface (`glass`) | `#111216` + `border white / 7%` | Cards, panels |
+| Text primary | `#f2f2f4` | |
+| Text secondary | `#a1a3ad` | |
+| Text muted | `#686b76` | |
+| `--color-accent` | `#7c66ff` (hover `#8d7aff`, soft text `#b9adff`) | Primary button, active states, score ring |
+| Positive | `#34d399` | Positive reasons, scores ≥ 70 |
 | Negative | `#f87171` | Penalties |
 | Warning | `#fbbf24` | Warnings |
 | Radius | 10 / 14 / 20 px | Inputs / cards / hero |
 | Font | Inter, system fallback; tabular numerals for times & scores | |
 
-Motion: 150–250 ms ease-out on hover/focus; progress shimmer on running jobs; no gratuitous animation.
+Motion: 150–250 ms ease-out on hover/focus; gentle pulse on running jobs; no gratuitous animation.
 
 ## Layout
 

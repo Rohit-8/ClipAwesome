@@ -26,7 +26,7 @@ export function Sidebar({ active }: { active: string }) {
   const { health, youtube } = useApp();
   const caps = health?.capabilities;
   return (
-    <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/60 px-4 py-5 backdrop-blur-xl md:flex">
+    <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-white/[0.06] bg-ink-900 px-4 py-5 md:flex">
       <a href="#/" className="flex items-center gap-2.5 px-2">
         <Logo size={30} />
         <div>
@@ -48,7 +48,7 @@ export function Sidebar({ active }: { active: string }) {
               )}
             >
               {on && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-accent" />}
-              <span className={on ? "text-[#c4b5fd]" : ""}>{n.icon}</span>
+              <span className={on ? "text-accent-soft" : ""}>{n.icon}</span>
               {n.label}
             </a>
           );
@@ -60,7 +60,7 @@ export function Sidebar({ active }: { active: string }) {
         <StatusRow
           ok={!!caps?.ai_configured}
           label="AI mode"
-          detail={caps?.ai_configured ? `${caps.ai_provider} · ${caps.ai_model}` : <a href="#/settings" className="text-[#c4b5fd] hover:underline">Configure provider</a>}
+          detail={caps?.ai_configured ? `${caps.ai_provider} · ${caps.ai_model}` : <a href="#/settings" className="text-accent-soft hover:underline">Configure provider</a>}
         />
         <StatusRow ok={!!caps?.whisper} label="Local transcription" detail={caps?.whisper ? "faster-whisper ready" : "Not installed"} />
         <StatusRow

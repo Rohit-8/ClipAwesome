@@ -57,7 +57,7 @@ export function Dropzone({
         <input ref={mediaInput} type="file" accept={MEDIA_ACCEPT} className="hidden" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
         {file ? (
           <div className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-xl bg-accent/90 text-white shadow-lg shadow-violet/20">
+            <div className="flex size-11 items-center justify-center rounded-xl bg-accent text-white">
               <FileVideo className="size-5" />
             </div>
             <div className="text-left">
@@ -102,7 +102,7 @@ export function Dropzone({
             Remove
           </button>
         ) : (
-          <button type="button" onClick={() => subInput.current?.click()} className="text-[12.5px] font-medium text-[#c4b5fd] hover:text-white">
+          <button type="button" onClick={() => subInput.current?.click()} className="text-[12.5px] font-medium text-accent-soft hover:text-white">
             Add file
           </button>
         )}

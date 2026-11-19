@@ -15,7 +15,7 @@ const BTN_SIZE: Record<Size, string> = {
 };
 const BTN_VARIANT: Record<Variant, string> = {
   primary:
-    "bg-accent text-white shadow-[0_10px_30px_-10px_rgba(124,92,246,0.7)] hover:brightness-110 hover:shadow-[0_12px_40px_-10px_rgba(124,92,246,0.85)] active:scale-[0.98]",
+    "bg-accent text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_1px_2px_rgba(0,0,0,0.5)] hover:bg-accent-hover active:scale-[0.98]",
   secondary: "bg-white/[0.05] text-fg border border-white/[0.08] hover:bg-white/[0.09] hover:border-white/[0.14]",
   ghost: "text-fg-2 hover:text-fg hover:bg-white/[0.06]",
   danger: "text-neg bg-neg/10 border border-neg/20 hover:bg-neg/15",
@@ -149,7 +149,7 @@ export function Chip({
       type="button"
       className={cx(
         "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-all duration-200",
-        active ? "border-violet/50 bg-violet/15 text-fg shadow-[0_0_0_3px_rgba(139,92,246,0.08)]" : "border-white/[0.08] text-fg-2 hover:border-white/20 hover:text-fg",
+        active ? "border-accent/60 bg-accent/15 text-fg" : "border-white/[0.08] text-fg-2 hover:border-white/20 hover:text-fg",
         className,
       )}
       {...rest}
@@ -266,7 +266,7 @@ export function Slider({
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="h-1.5 w-full cursor-pointer appearance-none rounded-full"
-        style={{ background: `linear-gradient(90deg, #8b5cf6 0%, #22d3ee ${pct}%, rgba(255,255,255,0.1) ${pct}%)` }}
+        style={{ background: `linear-gradient(90deg, var(--color-accent) ${pct}%, rgba(255,255,255,0.1) ${pct}%)` }}
       />
     </div>
   );
@@ -274,7 +274,7 @@ export function Slider({
 
 type Tone = "violet" | "cyan" | "pos" | "neg" | "warn" | "neutral";
 const TONES: Record<Tone, string> = {
-  violet: "bg-violet/12 text-[#c4b5fd] ring-violet/25",
+  violet: "bg-accent/12 text-accent-soft ring-accent/25",
   cyan: "bg-cyan/10 text-[#67e8f9] ring-cyan/20",
   pos: "bg-pos/10 text-pos ring-pos/20",
   neg: "bg-neg/10 text-neg ring-neg/20",
@@ -294,13 +294,10 @@ export function Badge({ tone = "neutral", icon, children, className }: { tone?: 
 export function ProgressBar({ value, active }: { value: number; active?: boolean }) {
   return (
     <div className="relative h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
-      <div className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out" style={{ width: `${Math.max(2, Math.min(100, value * 100))}%` }} />
-      {active && (
-        <div
-          className="absolute inset-0 animate-shimmer"
-          style={{ backgroundImage: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.18) 50%, transparent 100%)", backgroundSize: "200% 100%" }}
-        />
-      )}
+      <div
+        className={cx("h-full rounded-full bg-accent transition-[width] duration-500 ease-out", active && "animate-pulse")}
+        style={{ width: `${Math.max(2, Math.min(100, value * 100))}%` }}
+      />
     </div>
   );
 }
@@ -341,17 +338,9 @@ export function YouTubeMark({ className }: { className?: string }) {
 }
 
 export function Logo({ size = 32 }: { size?: number }) {
-  const id = useId();
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#8b5cf6" />
-          <stop offset=".5" stopColor="#6366f1" />
-          <stop offset="1" stopColor="#22d3ee" />
-        </linearGradient>
-      </defs>
-      <rect width="32" height="32" rx="9" fill={`url(#${id})`} />
+      <rect width="32" height="32" rx="9" fill="#7c66ff" />
       <path d="M8 21.5h3.2V10.5H8zM12.8 21.5H16V7.5h-3.2zM17.6 21.5h3.2v-8h-3.2zM22.4 21.5H24V15h-1.6z" fill="#fff" opacity=".95" />
     </svg>
   );

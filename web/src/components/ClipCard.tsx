@@ -10,7 +10,7 @@ import { Badge, IconButton } from "./ui";
 function ReasonRow({ r }: { r: Reason }) {
   const icon =
     r.signal === "ai" ? (
-      <Sparkles className="size-3.5 text-[#c4b5fd]" />
+      <Sparkles className="size-3.5 text-accent-soft" />
     ) : r.polarity === "neg" ? (
       <TriangleAlert className="size-3.5 text-neg" />
     ) : r.polarity === "info" ? (
@@ -57,7 +57,7 @@ export function ClipCard({
     <article
       className={cx(
         "group relative overflow-hidden rounded-2xl border p-4 transition-all duration-200",
-        active ? "border-violet/45 bg-white/[0.05] shadow-[0_0_0_1px_rgba(139,92,246,0.25),0_20px_50px_-25px_rgba(139,92,246,0.6)]" : "border-white/[0.07] bg-white/[0.025] hover:border-white/[0.13] hover:bg-white/[0.04]",
+        active ? "border-accent/55 bg-ink-800" : "border-white/[0.07] bg-ink-850 hover:border-white/[0.13] hover:bg-ink-800",
       )}
     >
       {active && <span className="absolute inset-y-0 left-0 w-[3px] bg-accent" />}

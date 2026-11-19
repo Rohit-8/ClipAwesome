@@ -12,8 +12,8 @@ Polarity = Literal["pos", "neg", "info"]
 class AnalyzeOptions(BaseModel):
     mode: Mode | None = None
     preset: PresetName | None = None
-    min_len: float | None = Field(None, ge=5, le=1800)
-    max_len: float | None = Field(None, ge=5, le=3600)
+    min_len: float | None = Field(None, ge=0, le=1_000_000)
+    max_len: float | None = Field(None, ge=0, le=1_000_000)
     query: str | None = Field(None, max_length=300)
     max_clips: int | None = Field(None, ge=1, le=30)
     include_comments: bool | None = None

@@ -15,7 +15,7 @@ from . import text as tx
 from .ai.llm import LLMClient, LLMError
 from .ai.rerank import expand_topic, rate_videos, rerank_clips
 from .config import Settings, data_path
-from .engine.presets import LengthSpec, resolve_preset
+from .engine.presets import LengthSpec, fit_to_duration, resolve_preset
 from .engine.scoring import EngineClip, score_source
 from .engine.signals import SourceSignals
 from .models import (
@@ -53,6 +53,7 @@ class SourceResult:
     clips: list[ClipSuggestion]
     timeline: Timeline
     lines: list[TranscriptLine]
+    spec: LengthSpec
 
 
 def _scaled(progress: Progress, lo: float, hi: float) -> Progress:
@@ -103,7 +104,10 @@ def run_engine(source: SourceVideo, sig: SourceSignals, plan: Plan, settings: Se
     focus = focus if focus is not None else plan.query
     qweights = tx.query_weights(focus, plan.keywords)
     pool = max(plan.limit, 18) if plan.llm else plan.limit
-    res = score_source(sig, plan.spec, settings.weights, qweights, pool)
+    spec, note = fit_to_duration(plan.spec, sig.duration)
+    if note:
+        warnings.append(note)
+    res = score_source(sig, spec, settings.weights, qweights, pool)
     warnings.extend(res.warnings)
     clips = [_to_suggestion(c, source.id, i) for i, c in enumerate(res.clips, 1)]
     if plan.llm and clips:
@@ -115,7 +119,7 @@ def run_engine(source: SourceVideo, sig: SourceSignals, plan: Plan, settings: Se
     else:
         clips = clips[: plan.limit]
     source.signals = res.signals
-    return SourceResult(source, clips, res.timeline, res.transcript_lines)
+    return SourceResult(source, clips, res.timeline, res.transcript_lines, spec)
 
 
 def _whisper(path: Path, settings: Settings, duration: float, progress: Progress) -> Transcript:
@@ -223,16 +227,27 @@ def youtube_source(video_id: str, sid: str, plan: Plan, settings: Settings, prog
     return source, sig
 
 
-def _analysis(kind: str, plan: Plan, title: str, started: float, results: list[SourceResult], clips: list[ClipSuggestion], warnings: list[str], query: str | None) -> Analysis:
+def _analysis(
+    kind: str,
+    plan: Plan,
+    title: str,
+    started: float,
+    results: list[SourceResult],
+    clips: list[ClipSuggestion],
+    warnings: list[str],
+    query: str | None,
+    spec: LengthSpec | None = None,
+) -> Analysis:
+    spec = spec or plan.spec
     for rank, c in enumerate(clips, 1):
         c.rank = rank
     return Analysis(
         id=new_analysis_id(),
         kind=kind,  # type: ignore[arg-type]
         mode=plan.mode,  # type: ignore[arg-type]
-        preset=plan.spec.name,
-        min_len=plan.spec.min_len,
-        max_len=plan.spec.max_len,
+        preset=spec.name,
+        min_len=round(spec.min_len, 2),
+        max_len=round(spec.max_len, 2),
         query=query,
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         elapsed_sec=round(time.perf_counter() - started, 1),
@@ -264,7 +279,7 @@ def analyze_youtube(url: str, opts: AnalyzeOptions, settings: Settings, progress
     source, sig = youtube_source(video_id, "s1", plan, settings, progress, warnings)
     progress("Scoring candidate clips", 0.9)
     result = run_engine(source, sig, plan, settings, warnings)
-    return _analysis("youtube", plan, source.title, started, [result], result.clips, warnings, plan.query)
+    return _analysis("youtube", plan, source.title, started, [result], result.clips, warnings, plan.query, result.spec)
 
 
 def analyze_local(
@@ -337,7 +352,7 @@ def analyze_local(
     sig = SourceSignals(duration=info.duration, transcript=transcript, audio_db=audio_db, scene_cuts=cuts)
     progress("Scoring candidate clips", 0.92)
     result = run_engine(source, sig, plan, settings, warnings)
-    return _analysis("local", plan, display_name, started, [result], result.clips, warnings, plan.query)
+    return _analysis("local", plan, display_name, started, [result], result.clips, warnings, plan.query, result.spec)
 
 
 def discover(req: DiscoverRequest, settings: Settings, progress: Progress) -> Analysis:

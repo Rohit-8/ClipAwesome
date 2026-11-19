@@ -70,7 +70,7 @@ export function JobView({ id }: { id: string }) {
           <div className="mt-7 space-y-3">
             <div className="flex items-center justify-between text-[13px]">
               <span className="flex items-center gap-2 text-fg">
-                {job?.status !== "done" && <LoaderCircle className="size-4 animate-spin text-[#c4b5fd]" />}
+                {job?.status !== "done" && <LoaderCircle className="size-4 animate-spin text-accent-soft" />}
                 {job?.stage ?? "Queued"}
               </span>
               <span className="tabular text-fg-2">{Math.round((job?.progress ?? 0) * 100)}%</span>

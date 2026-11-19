@@ -60,7 +60,7 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 
 | ID | Feature | Acceptance criteria |
 |---|---|---|
-| F5.1 | Length presets | Shorts 15–60 s, Standard 30–90 s, Long 60–180 s, Custom min/max. |
+| F5.1 | Length presets | Shorts 15–60 s, Standard 30–90 s, Long 60–180 s, Custom. Custom takes free-form times of any size (`90`, `1:30`, `2m 30s`, `1h 15m`). An invalid range is never rejected: the edited value snaps to the nearest valid one (min ≤ max − 5 s), ranges longer than the media are fitted to it, and if no sentence-aligned window fits exactly the nearest lengths are used — each adjustment is shown to the user. |
 | F5.2 | Clean boundaries | Clips start at a sentence start and end at a sentence end (or a pause when no transcript), with small lead/tail padding that never bleeds into the neighbouring sentence. |
 | F5.3 | No overlaps | Non-maximum suppression keeps suggestions distinct. |
 | F5.4 | Score 0–100 | Plus per-signal breakdown (value, weight, contribution). |

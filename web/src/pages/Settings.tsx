@@ -216,7 +216,7 @@ export function SettingsPage() {
                   }}
                   className={cx(
                     "rounded-xl border p-3 text-left transition-all duration-200",
-                    ai.provider === p.value ? "border-violet/50 bg-violet/[0.08] shadow-[0_0_0_3px_rgba(139,92,246,0.08)]" : "border-white/[0.07] hover:border-white/15 hover:bg-white/[0.02]",
+                    ai.provider === p.value ? "border-accent/55 bg-accent/[0.08]" : "border-white/[0.07] hover:border-white/15 hover:bg-white/[0.02]",
                   )}
                 >
                   <div className={cx("flex items-center gap-2 text-[13.5px] font-medium", ai.provider === p.value ? "text-fg" : "text-fg-2")}>
@@ -235,7 +235,7 @@ export function SettingsPage() {
               <Field
                 label="Model"
                 hint={
-                  <button type="button" onClick={loadModels} disabled={busy === "models"} className="inline-flex items-center gap-1 text-[#c4b5fd] hover:text-white disabled:opacity-50">
+                  <button type="button" onClick={loadModels} disabled={busy === "models"} className="inline-flex items-center gap-1 text-accent-soft hover:text-white disabled:opacity-50">
                     <RefreshCw className={cx("size-3", busy === "models" && "animate-spin")} /> Load models from endpoint
                   </button>
                 }
@@ -264,7 +264,7 @@ export function SettingsPage() {
                   ) : providerInfo.keyUrl ? (
                     <span>
                       Get a key at{" "}
-                      <a href={providerInfo.keyUrl} target="_blank" rel="noreferrer" className="text-[#c4b5fd] hover:underline">
+                      <a href={providerInfo.keyUrl} target="_blank" rel="noreferrer" className="text-accent-soft hover:underline">
                         {providerInfo.keyUrl.replace("https://", "")}
                       </a>
                       . Stored only on this machine and never sent back to the browser.
@@ -300,9 +300,9 @@ export function SettingsPage() {
                 <span>OpenAI SDK</span>
               </div>
               <pre className="overflow-x-auto px-4 py-3 font-mono text-[12px] leading-relaxed text-fg-2">
-                <span className="text-[#c4b5fd]">client</span> = OpenAI(base_url=<span className="text-[#86efac]">"{effectiveUrl}"</span>, api_key=
+                <span className="text-accent-soft">client</span> = OpenAI(base_url=<span className="text-[#86efac]">"{effectiveUrl}"</span>, api_key=
                 <span className="text-[#86efac]">"{ai.has_api_key || (!keyMasked && ai.api_key) ? "sk-…" : "not-needed"}"</span>){"\n"}
-                <span className="text-[#c4b5fd]">client</span>.chat.completions.create(model=<span className="text-[#86efac]">"{effectiveModel}"</span>, messages=[…])
+                <span className="text-accent-soft">client</span>.chat.completions.create(model=<span className="text-[#86efac]">"{effectiveModel}"</span>, messages=[…])
               </pre>
             </div>
 

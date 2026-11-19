@@ -8,7 +8,7 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 |---|---|---|---|
 | `mode` | `"deterministic" \| "ai"` | settings default | AI requires a configured provider |
 | `preset` | `"shorts" \| "standard" \| "long" \| "custom"` | settings default | |
-| `min_len`, `max_len` | number (s) | from preset | Required when `preset = custom` |
+| `min_len`, `max_len` | number (s, ≥ 0) | from preset | Used when `preset = custom`. No upper limit; swapped if reversed, widened to a 5 s gap, and fitted to each video's duration (the range actually used is returned on the `Analysis`). |
 | `query` | string | `null` | Focus: "what should clips be about?" |
 | `max_clips` | int 1–30 | settings default | |
 | `include_comments` | bool | settings default | YouTube only |

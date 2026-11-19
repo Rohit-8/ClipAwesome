@@ -7,7 +7,7 @@ const SERIES: Record<string, { label: string; color: string }> = {
   heatmap: { label: "Most replayed", color: "#22d3ee" },
   relevance: { label: "Topic relevance", color: "#fbbf24" },
   reactions: { label: "Reactions", color: "#34d399" },
-  audio: { label: "Audio energy", color: "#c4b5fd" },
+  audio: { label: "Audio energy", color: "#b9adff" },
   comments: { label: "Comments", color: "#f472b6" },
   highlight: { label: "Highlight", color: "#fde68a" },
   pace: { label: "Speech pace", color: "#93c5fd" },
@@ -73,7 +73,7 @@ export function Timeline({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-1.5 text-[12px] text-fg-2">
-          <span className="h-2.5 w-4 rounded-sm bg-gradient-to-r from-violet/70 to-cyan/50" /> Composite score
+          <span className="h-2.5 w-4 rounded-sm bg-accent/60" /> Composite score
         </span>
         <span className="mx-1 h-3 w-px bg-white/10" />
         {available.map((k) => (
@@ -100,12 +100,6 @@ export function Timeline({
         onClick={(e) => onSeek(timeAt(e.clientX))}
       >
         <svg viewBox={`0 0 1000 ${H}`} preserveAspectRatio="none" className="absolute inset-0 size-full">
-          <defs>
-            <linearGradient id="tl-area" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#8b5cf6" stopOpacity="0.55" />
-              <stop offset="1" stopColor="#22d3ee" stopOpacity="0.04" />
-            </linearGradient>
-          </defs>
           {[0.25, 0.5, 0.75].map((g) => (
             <line key={g} x1="0" x2="1000" y1={BASE - g * AMP} y2={BASE - g * AMP} stroke="rgba(255,255,255,0.04)" vectorEffect="non-scaling-stroke" />
           ))}
@@ -114,8 +108,8 @@ export function Timeline({
               <title>{`Excluded: ${m.label} (${fmtTime(m.start)}–${fmtTime(m.end)})`}</title>
             </rect>
           ))}
-          {area && <path d={area} fill="url(#tl-area)" />}
-          {composite.length > 1 && <path d={linePath(composite)} fill="none" stroke="#a78bfa" strokeWidth="1.25" strokeOpacity="0.8" vectorEffect="non-scaling-stroke" />}
+          {area && <path d={area} fill="#7c66ff" fillOpacity="0.22" />}
+          {composite.length > 1 && <path d={linePath(composite)} fill="none" stroke="#8d7aff" strokeWidth="1.25" strokeOpacity="0.9" vectorEffect="non-scaling-stroke" />}
           {available
             .filter((k) => shown.has(k))
             .map((k) => (

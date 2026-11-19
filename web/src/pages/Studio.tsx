@@ -1,13 +1,15 @@
-import { ArrowRight, ChevronDown, Cpu, FileVideo, FolderOpen, Gauge, ListChecks, ShieldCheck, Sparkles, Telescope, WandSparkles } from "lucide-react";
+import { ArrowRight, ChevronDown, Cpu, FileVideo, FolderOpen, Gauge, Info, ListChecks, ShieldCheck, Sparkles, Telescope, WandSparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { AnalysisTile } from "../components/AnalysisTile";
 import { Dropzone } from "../components/Dropzone";
+import { TimeInput } from "../components/TimeInput";
 import { Badge, Button, Card, Chip, Field, Input, Notice, Segmented, Select, Slider, Toggle, YouTubeMark } from "../components/ui";
 import { api } from "../lib/api";
 import { useApp } from "../lib/app-context";
 import { cx } from "../lib/format";
 import { navigate, useRoute } from "../lib/router";
+import { formatLength, snapRange } from "../lib/time";
 import type { AnalysisSummary, AnalyzeOptions, Mode, Preset } from "../lib/types";
 
 type Tab = "youtube" | "topic" | "local";
@@ -31,7 +33,7 @@ const YT_LIKE = /(youtube\.com\/(watch|shorts|live|embed)|youtu\.be\/)|^[A-Za-z0
 function Feature({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
     <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
-      <div className="mb-2.5 flex size-8 items-center justify-center rounded-lg bg-white/[0.05] text-[#c4b5fd] ring-1 ring-white/[0.06]">{icon}</div>
+      <div className="mb-2.5 flex size-8 items-center justify-center rounded-lg bg-white/[0.05] text-accent-soft ring-1 ring-white/[0.06]">{icon}</div>
       <div className="text-[13.5px] font-medium text-fg">{title}</div>
       <p className="mt-1 text-[12.5px] leading-relaxed text-fg-3">{body}</p>
     </div>
@@ -46,6 +48,8 @@ export function Studio() {
   const [preset, setPreset] = useState<Preset>("standard");
   const [minLen, setMinLen] = useState(20);
   const [maxLen, setMaxLen] = useState(75);
+  const [lenNote, setLenNote] = useState<string | null>(null);
+  const [fileLength, setFileLength] = useState<number | null>(null);
   const [maxClips, setMaxClips] = useState(8);
   const [includeComments, setIncludeComments] = useState(true);
   const [query, setQuery] = useState("");
@@ -85,6 +89,34 @@ export function Studio() {
   }, []);
 
   useEffect(() => setError(null), [tab]);
+
+  // Read the length of a picked local file in the browser so custom ranges can be capped before upload.
+  useEffect(() => {
+    setFileLength(null);
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const el = document.createElement(file.type.startsWith("audio") ? "audio" : "video");
+    el.preload = "metadata";
+    el.onloadedmetadata = () => Number.isFinite(el.duration) && el.duration > 0 && setFileLength(el.duration);
+    el.src = url;
+    return () => {
+      el.removeAttribute("src");
+      URL.revokeObjectURL(url);
+    };
+  }, [file]);
+
+  const mediaLength = tab === "local" && !usePath ? fileLength : null;
+
+  const applyRange = (min: number, max: number, edited: "min" | "max") => {
+    const r = snapRange(min, max, edited, mediaLength);
+    setMinLen(r.min);
+    setMaxLen(r.max);
+    setLenNote(r.note);
+  };
+
+  useEffect(() => {
+    if (mediaLength && maxLen > mediaLength) applyRange(minLen, maxLen, "max");
+  }, [mediaLength]);
 
   const canSubmit =
     tab === "youtube" ? YT_LIKE.test(url.trim()) : tab === "topic" ? topic.trim().length >= 2 : usePath ? path.trim().length > 3 : !!file;
@@ -137,7 +169,7 @@ export function Studio() {
           <span className="size-1.5 rounded-full bg-accent" /> Explainable clip discovery · Deterministic + AI
         </div>
         <h1 className="text-[34px] font-semibold leading-[1.1] tracking-tight text-fg md:text-[46px]">
-          Find the moments <span className="text-gradient">worth clipping.</span>
+          Find the moments <span className="text-accent-soft">worth clipping.</span>
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-[15px] leading-relaxed text-fg-2">
           Paste a YouTube link, describe a topic, or drop a local file. ClipAwesome ranks the best clip ranges and shows exactly why each one works.
@@ -247,7 +279,7 @@ export function Studio() {
               ) : (
                 <Dropzone file={file} subtitle={subtitle} onFile={setFile} onSubtitle={setSubtitle} />
               )}
-              <button type="button" onClick={() => setUsePath((v) => !v)} className="text-[12.5px] font-medium text-[#c4b5fd] hover:text-white">
+              <button type="button" onClick={() => setUsePath((v) => !v)} className="text-[12.5px] font-medium text-accent-soft hover:text-white">
                 {usePath ? "Upload a file instead" : "Large file? Use a file path instead"}
               </button>
               {!health?.capabilities.whisper && (
@@ -282,7 +314,7 @@ export function Studio() {
                 ]}
               />
               {!aiReady && (
-                <a href="#/settings" className="ml-3 text-[12px] text-[#c4b5fd] hover:underline">
+                <a href="#/settings" className="ml-3 text-[12px] text-accent-soft hover:underline">
                   Set up AI →
                 </a>
               )}
@@ -300,9 +332,20 @@ export function Studio() {
           </div>
 
           {preset === "custom" && (
-            <div className="grid gap-4 md:grid-cols-2">
-              <Slider label="Minimum length" value={minLen} min={5} max={300} onChange={(v) => setMinLen(Math.min(v, maxLen - 5))} format={(v) => `${v}s`} />
-              <Slider label="Maximum length" value={maxLen} min={10} max={600} step={5} onChange={(v) => setMaxLen(Math.max(v, minLen + 5))} format={(v) => `${v}s`} />
+            <div className="animate-fade-up space-y-3 rounded-xl border border-white/[0.06] bg-ink-900 p-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <TimeInput label="Minimum clip length" value={minLen} onCommit={(v) => applyRange(v, maxLen, "min")} />
+                <TimeInput label="Maximum clip length" value={maxLen} onCommit={(v) => applyRange(minLen, v, "max")} />
+              </div>
+              <p className="text-[12px] leading-relaxed text-fg-3">
+                Any length works — plain numbers are seconds, or write <span className="text-fg-2">1:30</span>, <span className="text-fg-2">2m 30s</span>,{" "}
+                <span className="text-fg-2">1h 15m</span>. {mediaLength ? `This file is ${formatLength(mediaLength)} long, so lengths are capped to it.` : "Ranges longer than the video are fitted to it automatically."}
+              </p>
+              {lenNote && (
+                <Notice tone="info" icon={<Info className="size-4" />}>
+                  {lenNote}
+                </Notice>
+              )}
             </div>
           )}
 
@@ -334,7 +377,7 @@ export function Studio() {
                 {mode === "ai" ? "AI re-ranking" : "Deterministic"}
               </Badge>
               <span>
-                up to {maxClips} clips · {preset === "custom" ? `${minLen}–${maxLen}s` : PRESETS.find((p) => p.value === preset)?.range}
+                up to {maxClips} clips · {preset === "custom" ? `${formatLength(minLen)} – ${formatLength(maxLen)}` : PRESETS.find((p) => p.value === preset)?.range}
               </span>
             </div>
             <Button variant="primary" size="lg" loading={busy} disabled={!canSubmit} onClick={submit} icon={<WandSparkles className="size-[18px]" />}>

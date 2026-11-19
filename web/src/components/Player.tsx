@@ -143,7 +143,7 @@ function YouTubePlayer({ source, onTime, ref }: { source: SourceVideo; onTime: (
   if (failed) {
     const link = `https://www.youtube.com/watch?v=${source.video_id}&t=${Math.floor(lastStart)}s`;
     return (
-      <div className="relative flex aspect-video w-full flex-col items-center justify-center gap-4 overflow-hidden rounded-xl bg-gradient-to-br from-ink-800 to-ink-900 text-center ring-1 ring-white/[0.06]">
+      <div className="relative flex aspect-video w-full flex-col items-center justify-center gap-4 overflow-hidden rounded-xl bg-ink-850 text-center ring-1 ring-white/[0.06]">
         <YouTubeMark className="h-9 w-12" />
         <div>
           <div className="text-sm font-medium text-fg">Embedded player unavailable on this network</div>
@@ -204,7 +204,7 @@ function LocalPlayer({ source, onTime, ref }: { source: SourceVideo; onTime: (t:
 
   if (unsupported) {
     return (
-      <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl bg-gradient-to-br from-ink-800 to-ink-900 px-8 text-center ring-1 ring-white/[0.06]">
+      <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl bg-ink-850 px-8 text-center ring-1 ring-white/[0.06]">
         <div className="flex size-12 items-center justify-center rounded-2xl bg-white/[0.05] ring-1 ring-white/10">
           <FileWarning className="size-5 text-warn" />
         </div>
@@ -218,7 +218,7 @@ function LocalPlayer({ source, onTime, ref }: { source: SourceVideo; onTime: (t:
 
   if (source.media_kind === "audio") {
     return (
-      <div className="flex aspect-video w-full flex-col justify-end gap-6 overflow-hidden rounded-xl bg-gradient-to-br from-violet/20 via-ink-850 to-cyan/10 p-6 ring-1 ring-white/[0.06]">
+      <div className="flex aspect-video w-full flex-col justify-end gap-6 overflow-hidden rounded-xl bg-ink-850 p-6 ring-1 ring-white/[0.06]">
         <div className="flex flex-1 items-center justify-center">
           <div className="flex size-16 items-center justify-center rounded-2xl bg-white/[0.06] ring-1 ring-white/10">
             <Music className="size-7 text-fg-2" />

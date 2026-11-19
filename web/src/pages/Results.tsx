@@ -28,6 +28,7 @@ import { api } from "../lib/api";
 import { download, slug, toCSV, toJSON, toMarkdown } from "../lib/exporters";
 import { cx, fmtCount, fmtDuration, relativeTime } from "../lib/format";
 import { navigate } from "../lib/router";
+import { formatLength } from "../lib/time";
 import type { Analysis, Clip, Preset, SearchResult } from "../lib/types";
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -261,7 +262,7 @@ export function Results({ id }: { id: string }) {
                 <Badge icon={<Cpu className="size-3" />}>Deterministic</Badge>
               )}
               <Badge>
-                {a.preset} · {a.min_len}–{a.max_len}s
+                {a.preset} · {formatLength(a.min_len)} – {formatLength(a.max_len)}
               </Badge>
               {a.query && <Badge tone="cyan">Focus: {a.query}</Badge>}
               {source.signals.map((s) => (

@@ -1,9 +1,11 @@
+import time
+
 import numpy as np
 import pytest
 
 from clipawesome.config import ScoringWeights
-from clipawesome.engine.presets import resolve_preset
-from clipawesome.engine.scoring import score_source
+from clipawesome.engine.presets import MIN_GAP, fit_to_duration, resolve_preset
+from clipawesome.engine.scoring import RangeMax, score_source
 from clipawesome.engine.signals import SourceSignals
 from clipawesome.text import query_weights
 from clipawesome.transcript import Event, Word, make_transcript
@@ -83,10 +85,46 @@ def test_audio_only_without_transcript():
     assert res.clips[0].title.startswith("Moment")
 
 
-def test_short_video_yields_warning():
+def test_short_video_falls_back_to_nearest_length():
     sig = SourceSignals(duration=10.0, audio_db=np.linspace(-40, -10, 20))
     res = score_source(sig, resolve_preset("standard"), ScoringWeights(), limit=3)
-    assert not res.clips and res.warnings
+    assert res.clips
+    assert any("nearest lengths" in w for w in res.warnings)
+
+
+def test_custom_range_is_snapped_not_rejected():
+    assert resolve_preset("custom", 120, 30) == resolve_preset("custom", 30, 120)
+    spec = resolve_preset("custom", 0, 0)
+    assert spec.name == "custom" and spec.min_len == 0 and spec.max_len == MIN_GAP
+    big = resolve_preset("custom", 600, 5400)
+    assert (big.min_len, big.max_len) == (600, 5400)
+
+
+def test_fit_to_duration_uses_nearest_feasible_range():
+    spec, note = fit_to_duration(resolve_preset("custom", 600, 5400), 1800)
+    assert (spec.min_len, spec.max_len) == (600, 1800) and note
+    spec, note = fit_to_duration(resolve_preset("custom", 900, 1200), 300)
+    assert (spec.min_len, spec.max_len) == (300 - MIN_GAP, 300)
+    unchanged, note = fit_to_duration(resolve_preset("shorts"), 600)
+    assert unchanged == resolve_preset("shorts") and note is None
+
+
+def test_range_max_matches_numpy():
+    rng = np.random.default_rng(7)
+    arr = rng.random(1000)
+    table = RangeMax(arr)
+    for lo, hi in [(0, 1), (0, 1000), (13, 14), (100, 357), (999, 1000), (512, 900)]:
+        assert table.query(lo, hi) == pytest.approx(arr[lo:hi].max())
+
+
+def test_very_long_range_is_fast():
+    duration = 3 * 3600.0
+    words = [Word(t, t + 0.4, "word.") for t in np.arange(0, duration, 3.0)]
+    sig = SourceSignals(duration=duration, transcript=make_transcript(words, [], "captions"), heatmap=_heatmap(5000, 5100))
+    started = time.perf_counter()
+    res = score_source(sig, resolve_preset("custom", 600, 5400), ScoringWeights(), limit=3)
+    assert res.clips and time.perf_counter() - started < 20
+    assert all(600 - 1 <= c.end - c.start <= 5400 + 1 for c in res.clips)
 
 
 def test_timeline_downsampled():

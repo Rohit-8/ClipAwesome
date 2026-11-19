@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 from collections import Counter
 from dataclasses import dataclass, field
@@ -82,6 +83,35 @@ class _Cand:
     feats: dict[str, float]
     excl: float
     silent: float
+
+
+MAX_ENDS_PER_START = 48
+
+
+class RangeMax:
+    """Sparse table: O(1) max over arr[lo:hi] after O(n log n) setup."""
+
+    def __init__(self, arr: np.ndarray):
+        self.levels = [np.asarray(arr, dtype=float)]
+        k = 1
+        while (1 << k) <= len(arr):
+            prev, half = self.levels[-1], 1 << (k - 1)
+            self.levels.append(np.maximum(prev[:-half], prev[half:]))
+            k += 1
+
+    def query(self, lo: int, hi: int) -> float:
+        k = (hi - lo).bit_length() - 1
+        level = self.levels[k]
+        return float(max(level[lo], level[hi - (1 << k)]))
+
+
+def _sample_ends(j_lo: int, j_hi: int) -> list[int]:
+    """All end units for normal ranges; evenly spaced ones when a very long range allows thousands."""
+    count = j_hi - j_lo + 1
+    if count <= MAX_ENDS_PER_START:
+        return list(range(j_lo, j_hi + 1))
+    step = (count - 1) / (MAX_ENDS_PER_START - 1)
+    return sorted({j_lo + round(k * step) for k in range(MAX_ENDS_PER_START)})
 
 
 def _is_question(text: str, punctuated: bool) -> bool:
@@ -306,40 +336,63 @@ def score_source(
         return EngineResult([], _timeline(sig, bundle, composite), lines, [], warnings)
 
     csum = {k: np.concatenate([[0.0], np.cumsum(bundle.series[k])]) for k in series_feats}
+    peaks = {k: RangeMax(bundle.series[k]) for k in series_feats}
     ex_cs = np.concatenate([[0.0], np.cumsum(bundle.excluded)])
     sp_cs = np.concatenate([[0.0], np.cumsum(bundle.speech.astype(float))]) if bundle.speech is not None else None
     hooks = [hook_score(u.text, punctuated)[0] if u.text else 0.5 for u in units] if "hook" in window_feats else []
     spread = 0.5 * max(1.0, spec.max_len - spec.min_len)
+    ends = [u.end for u in units]
 
     cands: list[_Cand] = []
+
+    def make(i: int, j: int) -> _Cand:
+        d = units[j].end - units[i].start
+        b0 = min(n - 1, max(0, int(units[i].start)))
+        b1 = min(n, max(b0 + 1, math.ceil(units[j].end)))
+        width = b1 - b0
+        feats: dict[str, float] = {}
+        for k in series_feats:
+            feats[k] = 0.6 * (csum[k][b1] - csum[k][b0]) / width + 0.4 * peaks[k].query(b0, b1)
+        if "hook" in window_feats:
+            feats["hook"] = hooks[i]
+        if "completeness" in window_feats:
+            feats["completeness"] = _completeness(units, i, j, punctuated)
+        base = sum(w_all[k] * v for k, v in feats.items()) / w_sum
+        excl = (ex_cs[b1] - ex_cs[b0]) / width
+        silent = 1 - (sp_cs[b1] - sp_cs[b0]) / width if sp_cs is not None else 0.0
+        fit = math.exp(-(((d - spec.target) / spread) ** 2))
+        score = 100 * base * (1 - 0.9 * excl) * (1 - 0.5 * max(0.0, silent - 0.25)) * (0.92 + 0.08 * fit)
+        return _Cand(i, j, units[i].start, units[j].end, score, base, feats, excl, silent)
+
     for i in range(len(units)):
-        for j in range(i, len(units)):
-            d = units[j].end - units[i].start
-            if d < spec.min_len:
-                continue
-            if d > spec.max_len:
-                break
-            b0 = max(0, int(units[i].start))
-            b1 = min(n, max(b0 + 1, math.ceil(units[j].end)))
-            width = b1 - b0
-            feats: dict[str, float] = {}
-            for k in series_feats:
-                arr = bundle.series[k]
-                feats[k] = 0.6 * (csum[k][b1] - csum[k][b0]) / width + 0.4 * float(arr[b0:b1].max())
-            if "hook" in window_feats:
-                feats["hook"] = hooks[i]
-            if "completeness" in window_feats:
-                feats["completeness"] = _completeness(units, i, j, punctuated)
-            base = sum(w_all[k] * v for k, v in feats.items()) / w_sum
-            excl = (ex_cs[b1] - ex_cs[b0]) / width
-            silent = 1 - (sp_cs[b1] - sp_cs[b0]) / width if sp_cs is not None else 0.0
-            fit = math.exp(-(((d - spec.target) / spread) ** 2))
-            score = 100 * base * (1 - 0.9 * excl) * (1 - 0.5 * max(0.0, silent - 0.25)) * (0.92 + 0.08 * fit)
-            cands.append(_Cand(i, j, units[i].start, units[j].end, score, base, feats, excl, silent))
+        start = units[i].start
+        j_lo = max(i, bisect.bisect_left(ends, start + spec.min_len))
+        j_hi = bisect.bisect_right(ends, start + spec.max_len) - 1
+        if j_hi >= j_lo:
+            cands.extend(make(i, j) for j in _sample_ends(j_lo, j_hi))
 
     if not cands:
-        warnings.append(f"Video is shorter than the minimum clip length ({spec.min_len:.0f}s)")
-        return EngineResult([], _timeline(sig, bundle, composite), lines, feats_used, warnings)
+        # Nothing fits exactly: per start, take the window whose length is nearest the requested range.
+        def gap(i: int, j: int) -> float:
+            d = units[j].end - units[i].start
+            return max(0.0, spec.min_len - d, d - spec.max_len)
+
+        nearest: list[tuple[float, int, int]] = []
+        last = len(units) - 1
+        for i in range(len(units)):
+            start = units[i].start
+            j_lo = bisect.bisect_left(ends, start + spec.min_len)
+            j_hi = bisect.bisect_right(ends, start + spec.max_len) - 1
+            options = {min(last, max(i, j)) for j in (j_lo - 1, j_lo, j_hi, j_hi + 1)}
+            best = min(options, key=lambda j: gap(i, j))
+            nearest.append((gap(i, best), i, best))
+        best_gap = min(g for g, _, _ in nearest)
+        cands = [make(i, j) for g, i, j in nearest if g <= best_gap + 2.0]
+        lengths = sorted(units[j].end - units[i].start for g, i, j in nearest if g <= best_gap + 2.0)
+        warnings.append(
+            f"No sentence-aligned clip fits {tx.fmt_time(spec.min_len)}–{tx.fmt_time(spec.max_len)}; "
+            f"showing the nearest lengths ({tx.fmt_time(lengths[0])}–{tx.fmt_time(lengths[-1])})"
+        )
 
     cands.sort(key=lambda c: c.score, reverse=True)
     picked: list[_Cand] = []

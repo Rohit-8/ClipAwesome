@@ -4,31 +4,28 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
-  --color-ink-950: #07080c;
-  --color-ink-900: #0b0d13;
-  --color-ink-850: #0f1219;
-  --color-ink-800: #141823;
-  --color-ink-700: #1c2130;
-  --color-ink-600: #283044;
+  --color-ink-950: #09090b;
+  --color-ink-900: #0e0f12;
+  --color-ink-850: #121318;
+  --color-ink-800: #17181e;
+  --color-ink-700: #1f2128;
+  --color-ink-600: #2a2d36;
 
-  --color-fg: #eef0f6;
-  --color-fg-2: #a3aabd;
-  --color-fg-3: #6b7287;
+  --color-fg: #f2f2f4;
+  --color-fg-2: #a1a3ad;
+  --color-fg-3: #686b76;
 
-  --color-violet: #8b5cf6;
-  --color-indigo: #6366f1;
+  --color-accent: #7c66ff;
+  --color-accent-hover: #8d7aff;
+  --color-accent-soft: #b9adff;
+  --color-violet: #7c66ff;
   --color-cyan: #22d3ee;
   --color-pos: #34d399;
   --color-neg: #f87171;
   --color-warn: #fbbf24;
 
-  --animate-shimmer: shimmer 1.8s linear infinite;
   --animate-fade-up: fade-up 0.35s ease-out both;
 
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-  }
   @keyframes fade-up {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: translateY(0); }
@@ -36,26 +33,14 @@
 }
 
 @utility glass {
-  background: linear-gradient(180deg, rgb(255 255 255 / 0.035), rgb(255 255 255 / 0.015));
+  background-color: #111216;
   border: 1px solid rgb(255 255 255 / 0.07);
-  backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03);
 }
 
 @utility glass-strong {
-  background: linear-gradient(180deg, rgb(20 24 35 / 0.92), rgb(15 18 25 / 0.92));
-  border: 1px solid rgb(255 255 255 / 0.08);
-  backdrop-filter: blur(20px);
-}
-
-@utility bg-accent {
-  background-image: linear-gradient(135deg, #8b5cf6 0%, #6366f1 50%, #22d3ee 100%);
-}
-
-@utility text-gradient {
-  background-image: linear-gradient(90deg, #c4b5fd 0%, #a5b4fc 40%, #67e8f9 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  background-color: #16171c;
+  border: 1px solid rgb(255 255 255 / 0.09);
 }
 
 @utility hairline {
@@ -71,17 +56,12 @@
   body {
     @apply bg-ink-950 text-fg font-sans antialiased;
     font-feature-settings: "cv11", "ss01";
-    background-image:
-      radial-gradient(900px 520px at 12% -10%, rgb(139 92 246 / 0.14), transparent 60%),
-      radial-gradient(700px 480px at 95% 0%, rgb(34 211 238 / 0.08), transparent 60%),
-      radial-gradient(800px 600px at 50% 110%, rgb(99 102 241 / 0.07), transparent 60%);
-    background-attachment: fixed;
   }
   ::selection {
-    background: rgb(139 92 246 / 0.35);
+    background: rgb(124 102 255 / 0.35);
   }
   :focus-visible {
-    outline: 2px solid rgb(139 92 246 / 0.8);
+    outline: 2px solid rgb(124 102 255 / 0.85);
     outline-offset: 2px;
     border-radius: 6px;
   }
@@ -90,7 +70,7 @@
     scrollbar-color: rgb(255 255 255 / 0.12) transparent;
   }
   input[type="range"] {
-    accent-color: #8b5cf6;
+    accent-color: #7c66ff;
   }
   .tabular {
     font-variant-numeric: tabular-nums;

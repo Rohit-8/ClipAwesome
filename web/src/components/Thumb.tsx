@@ -9,7 +9,7 @@ export function Thumb({ src, kind, className }: { src: string | null | undefined
     return <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className={cx("object-cover", className)} />;
   }
   return (
-    <div className={cx("flex items-center justify-center bg-gradient-to-br from-violet/25 via-ink-800 to-cyan/15", className)}>
+    <div className={cx("flex items-center justify-center bg-ink-700", className)}>
       {kind === "youtube" ? (
         <YouTubeMark className="h-5 w-7 opacity-90" />
       ) : kind === "discover" ? (
