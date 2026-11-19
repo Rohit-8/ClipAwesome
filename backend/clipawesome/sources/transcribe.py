@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import data_path
+from .local_media import decode_audio
 
 _models: dict[tuple[str, str, str], Any] = {}
 _load_lock = threading.Lock()
@@ -40,18 +41,20 @@ def transcribe(
 ) -> tuple[list[tuple[float, float, str]], str | None]:
     """Returns word-level items (start, end, text) and the detected language."""
     model = _model(model_size, device, compute_type)
+    # faster-whisper's own decoder uses a PyAV argument removed in PyAV 15+, so decode here instead.
+    audio = decode_audio(path, 16000)
     items: list[tuple[float, float, str]] = []
     # One transcription at a time keeps memory bounded on CPU machines.
     with _run_lock:
         segments, info = model.transcribe(
-            str(path),
+            audio,
             word_timestamps=True,
             vad_filter=True,
             beam_size=1,
             condition_on_previous_text=False,
             language=language or None,
         )
-        total = info.duration or duration or 0
+        total = len(audio) / 16000 or duration or 0
         for seg in segments:
             if seg.words:
                 items.extend((float(w.start), float(w.end), w.word) for w in seg.words)

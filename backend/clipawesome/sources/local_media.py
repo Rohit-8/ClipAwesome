@@ -84,6 +84,21 @@ def loudness(path: Path, hop: float = 0.5, duration: float | None = None, progre
     return 20 * np.log10(rms + 1e-5)
 
 
+def decode_audio(path: Path, rate: int = 16000) -> np.ndarray:
+    """Whole audio track as mono float32 PCM at `rate` Hz (the input format Whisper expects)."""
+    chunks: list[np.ndarray] = []
+    with av.open(str(path)) as c:
+        if not c.streams.audio:
+            return np.zeros(0, dtype=np.float32)
+        stream = c.streams.audio[0]
+        stream.thread_type = "AUTO"
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=rate)
+        for frame in c.decode(stream):
+            chunks.extend(f.to_ndarray().reshape(-1) for f in resampler.resample(frame))
+        chunks.extend(f.to_ndarray().reshape(-1) for f in resampler.resample(None))
+    return np.concatenate(chunks).astype(np.float32) if chunks else np.zeros(0, dtype=np.float32)
+
+
 def scene_cuts(path: Path, mode: str = "fast", duration: float | None = None, progress: Progress | None = None) -> list[float]:
     """Detects hard visual changes. `fast` inspects key-frames only; `full` samples ~5 frames per second."""
     cuts: list[float] = []

@@ -62,6 +62,12 @@ def test_loudness_detects_burst(media):
     assert db[int(22 / 0.5)] > db[int(5 / 0.5)] + 15
 
 
+def test_decode_audio_for_whisper(media):
+    pcm = local_media.decode_audio(media, 16000)
+    assert pcm.dtype == np.float32 and pcm.ndim == 1
+    assert abs(len(pcm) / 16000 - SECONDS) < 0.5
+
+
 @pytest.mark.parametrize("mode", ["full", "fast"])
 def test_scene_cuts(media, mode):
     cuts = local_media.scene_cuts(media, mode)
