@@ -120,6 +120,9 @@ def check_reachable(timeout: float = 6.0) -> tuple[bool, str]:
         return resp.status_code in (200, 204), f"YouTube reachable (HTTP {resp.status_code})"
     except httpx.HTTPError as err:
         return False, f"{NETWORK_HINT} ({type(err).__name__})"
+    except (ImportError, RuntimeError, ValueError) as err:
+        # Bad proxy URL or missing SOCKS support surface here, not as HTTPError.
+        return False, f"Proxy error: {err}"
 
 
 def fetch_info(video_id: str, include_comments: bool = False, max_comments: int = 0) -> dict[str, Any]:
