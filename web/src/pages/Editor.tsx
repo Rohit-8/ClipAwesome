@@ -10,6 +10,7 @@ import {
   Film,
   ImagePlay,
   LoaderCircle,
+  Merge,
   Pause,
   Play,
   Repeat,
@@ -23,14 +24,15 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import type { DragEvent, ReactNode } from "react";
+import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CropOverlay, fitCrop } from "../components/CropOverlay";
+import { MergeWorkspace, encoderText, useGpuStatus } from "../components/MergeWorkspace";
 import { Thumb } from "../components/Thumb";
 import { TimeInput } from "../components/TimeInput";
 import { useToast } from "../components/Toast";
 import { TrimBar } from "../components/TrimBar";
-import { Badge, Button, Card, Chip, Field, IconButton, Notice, ProgressBar, Segmented, Select, Toggle } from "../components/ui";
+import { Badge, Button, Card, Chip, Field, IconButton, Notice, ProgressBar, Segmented, Select, Toggle, ToolSection } from "../components/ui";
 import { api } from "../lib/api";
 import { browserDecodes, useCompatAudio } from "../lib/compat-audio";
 import { cx, fmtBytes, fmtDuration, relativeTime } from "../lib/format";
@@ -229,20 +231,9 @@ function SourcePicker() {
 
 // ------------------------------------------------------------------ workspace
 
-function ToolSection({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="space-y-2.5">
-      <div>
-        <div className="text-[11px] font-medium uppercase tracking-wider text-fg-3">{title}</div>
-        {hint && <div className="mt-0.5 text-[12px] text-fg-3">{hint}</div>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task: ExportTask) => void }) {
   const toast = useToast();
+  const gpu = useGpuStatus();
   const video = useRef<HTMLVideoElement>(null);
   const [dims, setDims] = useState({ w: source.width || 1920, h: source.height || 1080 });
   const [duration, setDuration] = useState(source.duration);
@@ -404,6 +395,9 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
               {source.fps ? ` · ${Math.round(source.fps)} fps` : ""}
             </div>
           </div>
+          <Button size="sm" variant="ghost" icon={<Merge className="size-3.5" />} onClick={() => navigate(`editor?mode=merge&add=${source.id}`)}>
+            Merge with other clips
+          </Button>
           <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => navigate("editor")}>
             Change file
           </Button>
@@ -680,6 +674,12 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
               {useFast ? "Same as source" : format === "mp4" ? "MP4 · H.264" : format === "mp3" ? "MP3" : "Animated GIF"}
             </span>
           </div>
+          {format === "mp4" && !useFast && (
+            <div className="flex justify-between gap-3">
+              <span className="text-fg-3">Encoder</span>
+              <span className="truncate font-medium text-fg">{encoderText(gpu)}</span>
+            </div>
+          )}
         </div>
         {gifTooLong && <Notice tone="neg">GIFs are limited to 60 seconds. Shorten the selection.</Notice>}
 
@@ -702,17 +702,27 @@ function ExportRow({ task, onCancel, onDelete }: { task: ExportTask; onCancel: (
       `${Math.round(task.progress * 100)}%`,
       task.speed ? `${task.speed.toFixed(1)}× realtime` : null,
       task.eta != null ? `${fmtDuration(task.eta)} left` : null,
+      task.encoder,
     ]
       .filter(Boolean)
       .join(" · ");
-  else if (task.status === "done") detail = `Ready · ${fmtBytes(task.file_size)} · ${relativeTime(task.finished_at ?? task.created_at)}`;
+  else if (task.status === "done")
+    detail = [`Ready · ${fmtBytes(task.file_size)} · ${relativeTime(task.finished_at ?? task.created_at)}`, task.encoder].filter(Boolean).join(" · ");
   else if (task.status === "cancelled") detail = "Cancelled";
   else detail = task.error || "Export failed";
 
   return (
     <div className="flex items-center gap-4 rounded-xl border border-white/[0.06] bg-black/20 p-3">
       <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white/[0.05] text-fg-2 ring-1 ring-white/[0.06]">
-        {task.format === "mp3" ? <AudioWaveform className="size-4" /> : task.format === "gif" ? <ImagePlay className="size-4" /> : <Film className="size-4" />}
+        {task.label.startsWith("Merge") ? (
+          <Merge className="size-4" />
+        ) : task.format === "mp3" ? (
+          <AudioWaveform className="size-4" />
+        ) : task.format === "gif" ? (
+          <ImagePlay className="size-4" />
+        ) : (
+          <Film className="size-4" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -764,6 +774,7 @@ export function EditorPage() {
   const { params } = useRoute();
   const sourceId = params.get("source");
   const downloadId = params.get("download");
+  const merging = params.get("mode") === "merge";
   const toast = useToast();
   const [source, setSource] = useState<EditSource | null>(null);
   const [opening, setOpening] = useState(false);
@@ -870,16 +881,21 @@ export function EditorPage() {
       <div className="mb-7 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-[28px] font-semibold tracking-tight text-fg">Editor</h1>
-          <p className="mt-1 text-[14px] text-fg-2">Trim, crop and convert videos with FFmpeg on this server. Nothing is sent anywhere else.</p>
+          <p className="mt-1 text-[14px] text-fg-2">Trim, crop, convert and merge videos with FFmpeg on this server. Nothing is sent anywhere else.</p>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {["Trim", "Crop", "Rotate & flip", "Resize", "Remove audio", "MP3", "GIF", "Fast cut"].map((f) => (
-            <Badge key={f}>{f}</Badge>
-          ))}
-        </div>
+        <Segmented
+          value={merging ? "merge" : "edit"}
+          onChange={(v) => navigate(v === "merge" ? (source ? `editor?mode=merge&add=${source.id}` : "editor?mode=merge") : "editor")}
+          options={[
+            { value: "edit", label: "Edit a video", icon: <Scissors className="size-3.5" /> },
+            { value: "merge", label: "Merge videos", icon: <Merge className="size-3.5" /> },
+          ]}
+        />
       </div>
 
-      {opening && !source ? (
+      {merging ? (
+        <MergeWorkspace seed={params.get("add")} onStarted={started} />
+      ) : opening && !source ? (
         <Card className="h-[420px] animate-pulse bg-white/[0.02]" />
       ) : source && source.id === sourceId ? (
         <Workspace key={source.id} source={source} onStarted={started} />

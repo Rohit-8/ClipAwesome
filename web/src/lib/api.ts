@@ -10,8 +10,10 @@ import type {
   EditSource,
   ExportRequest,
   ExportTask,
+  GpuStatus,
   Health,
   Job,
+  MergeRequest,
   Settings,
 } from "./types";
 
@@ -127,6 +129,9 @@ export const api = {
   editorPreviewAudioUrl: (id: string) => `/api/editor/sources/${encodeURIComponent(id)}/preview-audio`,
   mediaPreviewAudioUrl: (mediaId: string) => `/api/media/${encodeURIComponent(mediaId)}/preview-audio`,
   startExport: (req: ExportRequest) => request<ExportTask>("POST", "/editor/exports", req),
+  startMerge: (req: MergeRequest) => request<ExportTask>("POST", "/editor/merges", req),
+  gpuStatus: () => request<GpuStatus>("GET", "/editor/gpu"),
+  detectGpu: () => request<GpuStatus>("POST", "/editor/gpu/detect"),
   exports: () => request<ExportTask[]>("GET", "/editor/exports"),
   cancelExport: (id: string) => request<ExportTask>("POST", `/editor/exports/${encodeURIComponent(id)}/cancel`),
   deleteExport: (id: string) => request<void>("DELETE", `/editor/exports/${encodeURIComponent(id)}`),

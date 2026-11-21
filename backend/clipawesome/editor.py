@@ -1,4 +1,4 @@
-"""Simple video editing with FFmpeg: trim, crop, rotate/flip, resize, mute and convert (MP4 / MP3 / GIF)."""
+"""Simple video editing with FFmpeg: trim, crop, rotate/flip, resize, mute, convert (MP4 / MP3 / GIF) and merge clips."""
 
 from __future__ import annotations
 
@@ -9,13 +9,16 @@ import shutil
 import subprocess
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
+import av
 from pydantic import BaseModel, Field, model_validator
 
+from . import gpu
 from .config import data_path, read_json, write_json
 from .downloads import ffmpeg_path, now_iso
 from .sources.local_media import probe
@@ -23,9 +26,11 @@ from .sources.local_media import probe
 log = logging.getLogger("clipawesome.editor")
 
 ACTIVE = ("queued", "running")
-CRF = {"high": 18, "balanced": 23, "small": 28}
 HEIGHTS = (2160, 1440, 1080, 720, 480, 360)
 GIF_MAX_SEC = 60.0
+MAX_MERGE_CLIPS = 20
+FRAME_RATIOS = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0}
+FFMPEG_HEAD = ("-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1")
 
 
 class EditError(ValueError):
@@ -88,17 +93,49 @@ class EditSource(BaseModel):
     audio_codec: str | None = None
     width: int | None = None
     height: int | None = None
+    rotation: int = 0
     fps: float | None = None
     size: int
     created_at: str
 
 
+class MergeClip(BaseModel):
+    source_id: str = Field(..., min_length=3, max_length=40)
+    start: float = Field(0, ge=0)
+    end: float = Field(..., gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> MergeClip:
+        if self.end - self.start < 0.1:
+            raise ValueError("each clip must end after it starts")
+        return self
+
+
+class MergeRequest(BaseModel):
+    clips: list[MergeClip] = Field(..., min_length=2, max_length=MAX_MERGE_CLIPS)
+    frame: Literal["first", "16:9", "9:16", "1:1"] = "first"
+    fit: Literal["pad", "crop"] = "pad"
+    resolution: int | None = None  # short side of the output frame
+    mute: bool = False
+    format: Literal["mp4", "mp3"] = "mp4"
+    quality: Literal["high", "balanced", "small"] = "balanced"
+    fast: bool = False
+
+    @model_validator(mode="after")
+    def _check(self) -> MergeRequest:
+        if self.resolution is not None and self.resolution not in HEIGHTS:
+            raise ValueError(f"resolution must be one of {HEIGHTS}")
+        return self
+
+
 class ExportTask(BaseModel):
     id: str
     source_id: str
+    source_ids: list[str] = Field(default_factory=list)
     source_name: str
     label: str
     format: str
+    encoder: str | None = None
     status: Literal["queued", "running", "done", "error", "cancelled"] = "queued"
     progress: float = 0.0
     speed: float | None = None
@@ -118,12 +155,19 @@ def _fmt_t(sec: float) -> str:
     return f"{s // 3600}-{s % 3600 // 60:02d}-{s % 60:02d}" if s >= 3600 else f"{s // 60}-{s % 60:02d}"
 
 
-def output_name(source_name: str, req: ExportRequest, source_ext: str) -> str:
-    base = re.split(r"[\\/]", source_name)[-1]
+def _safe_stem(name: str) -> str:
+    base = re.split(r"[\\/]", name)[-1]
     stem = base.rsplit(".", 1)[0] if "." in base else base
-    stem = re.sub(r"[^\w\-. ()\[\]]+", "_", stem).strip(" ._") or "video"
+    return re.sub(r"[^\w\-. ()\[\]]+", "_", stem).strip(" ._") or "video"
+
+
+def _even(n: float) -> int:
+    return max(2, round(n / 2) * 2)
+
+
+def output_name(source_name: str, req: ExportRequest, source_ext: str) -> str:
     ext = source_ext.lstrip(".").lower() if req.fast else req.format
-    return f"{stem[:80]} [{_fmt_t(req.start)} to {_fmt_t(req.end)}].{ext}"
+    return f"{_safe_stem(source_name)[:80]} [{_fmt_t(req.start)} to {_fmt_t(req.end)}].{ext}"
 
 
 def describe(req: ExportRequest) -> str:
@@ -167,9 +211,10 @@ def _video_filters(req: ExportRequest) -> list[str]:
     return vf
 
 
-def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path) -> list[str]:
+def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path, codec: str | None = None) -> list[str]:
+    """`codec` is a GPU H.264 encoder (see gpu.py); None encodes on the CPU with x264."""
     end = min(req.end, src.duration)
-    args = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1"]
+    args = [ffmpeg, *FFMPEG_HEAD]
     args += ["-ss", f"{req.start:.3f}", "-i", src.path, "-t", f"{end - req.start:.3f}"]
 
     if req.fast:
@@ -191,9 +236,141 @@ def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path) -
     args += ["-map", "0:v:0"] + ([] if req.mute or not src.has_audio else ["-map", "0:a:0"])
     if vf:
         args += ["-vf", ",".join(vf)]
-    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(CRF[req.quality]), "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    args += [*gpu.video_args(req.quality, codec), "-movflags", "+faststart"]
     args += ["-an"] if req.mute or not src.has_audio else ["-c:a", "aac", "-b:a", "160k"]
     return args + [str(out)]
+
+
+# ------------------------------------------------------------------ merging
+
+
+def display_size(src: EditSource) -> tuple[int, int]:
+    w, h = src.width or 1920, src.height or 1080
+    return (h, w) if src.rotation in (90, 270) else (w, h)
+
+
+def merge_canvas(req: MergeRequest, first: EditSource) -> tuple[int, int]:
+    """Output frame: the first video clip's shape or a fixed ratio, with `resolution` as the short side."""
+    w, h = display_size(first)
+    ratio = FRAME_RATIOS.get(req.frame, w / h)
+    short = req.resolution or min(w, h)
+    return (_even(short * ratio), _even(short)) if ratio >= 1 else (_even(short), _even(short / ratio))
+
+
+def merge_fps(first: EditSource) -> float:
+    return min(60.0, max(1.0, round(first.fps, 3))) if first.fps else 30.0
+
+
+def stream_signature(path: Path) -> tuple[Any, Any]:
+    """What must match for clips to be joined without re-encoding."""
+    with av.open(str(path)) as c:
+        v = c.streams.video[0] if c.streams.video else None
+        a = c.streams.audio[0] if c.streams.audio else None
+        sv = (v.codec_context.name, v.codec_context.width, v.codec_context.height, v.codec_context.pix_fmt, round(float(v.average_rate or 0), 2)) if v else None
+        sa = (a.codec_context.name, a.codec_context.sample_rate, a.codec_context.channels) if a else None
+    return sv, sa
+
+
+def _sig_text(sig: tuple[Any, Any]) -> str:
+    v, a = sig
+    text = f"{v[1]}×{v[2]} {v[0]} {v[4]:g} fps" if v else "no video"
+    return text + (f", {a[0]} {a[1]} Hz" if a else ", no audio")
+
+
+def validate_merge(req: MergeRequest, items: list[tuple[MergeClip, EditSource]], signature: Callable[[Path], tuple[Any, Any]] = stream_signature) -> None:
+    for n, (clip, src) in enumerate(items, 1):
+        if clip.start >= src.duration:
+            raise EditError(f"Clip {n} starts after the end of “{src.name}”.")
+    if req.format == "mp4" and not any(s.has_video for _, s in items):
+        raise EditError("None of these clips has video — merge them as MP3.")
+    if req.format == "mp3" and not any(s.has_audio for _, s in items):
+        raise EditError("None of these clips has audio.")
+    if not req.fast:
+        return
+    if req.format != "mp4" or not all(s.has_video for _, s in items):
+        raise EditError("Fast merge only joins video clips. Turn it off to re-encode.")
+    sigs = [(signature(Path(s.path)), s.rotation) for _, s in items]
+    (v0, a0), rot0 = sigs[0]
+    for n, ((v, a), rot) in enumerate(sigs[1:], 2):
+        if v != v0 or rot != rot0 or (not req.mute and a != a0):
+            raise EditError(
+                f"Fast merge needs every clip in the same format, but clip {n} is {_sig_text((v, a))} and clip 1 is {_sig_text((v0, a0))}. "
+                "Turn off Fast merge to re-encode them."
+            )
+
+
+def build_merge_command(ffmpeg: str, items: list[tuple[MergeClip, EditSource]], req: MergeRequest, out: Path, codec: str | None = None) -> list[str]:
+    video = req.format == "mp4"
+    audio = req.format == "mp3" or (not req.mute and any(s.has_audio for _, s in items))
+    rate = 44100 if req.format == "mp3" else 48000
+    args = [ffmpeg, *FFMPEG_HEAD]
+    graph: list[str] = []
+    pads: list[str] = []
+    if video:
+        first = next(s for _, s in items if s.has_video)
+        w, h = merge_canvas(req, first)
+        fps = f"{merge_fps(first):g}"
+        if req.fit == "pad":
+            fit = f"scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"
+        else:
+            fit = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+    for i, (clip, src) in enumerate(items):
+        dur = min(clip.end, src.duration) - clip.start
+        args += ["-ss", f"{clip.start:.3f}", "-t", f"{dur:.3f}", "-i", src.path]
+        if video:
+            if src.has_video:
+                graph.append(f"[{i}:v:0]{fit},setsar=1,fps={fps},format=yuv420p,setpts=PTS-STARTPTS[v{i}]")
+            else:
+                graph.append(f"color=c=black:s={w}x{h}:r={fps}:d={dur:.3f},format=yuv420p,setsar=1[v{i}]")
+            pads.append(f"[v{i}]")
+        if audio:
+            if src.has_audio:
+                graph.append(f"[{i}:a:0]aresample={rate},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]")
+            else:
+                graph.append(f"anullsrc=r={rate}:cl=stereo,atrim=duration={dur:.3f}[a{i}]")
+            pads.append(f"[a{i}]")
+    outs = ("[v]" if video else "") + ("[a]" if audio else "")
+    graph.append(f"{''.join(pads)}concat=n={len(items)}:v={int(video)}:a={int(audio)}{outs}")
+    args += ["-filter_complex", ";".join(graph)]
+    if video:
+        args += ["-map", "[v]", *gpu.video_args(req.quality, codec), "-movflags", "+faststart"]
+    if audio:
+        args += ["-map", "[a]", *(["-c:a", "libmp3lame", "-q:a", "2"] if req.format == "mp3" else ["-c:a", "aac", "-b:a", "160k"])]
+    return args + [str(out)]
+
+
+def ffconcat(items: list[tuple[MergeClip, EditSource]]) -> str:
+    lines = ["ffconcat version 1.0"]
+    for clip, src in items:
+        path = src.path.replace("'", "'\\''")
+        lines += [f"file '{path}'", f"inpoint {clip.start:.3f}", f"outpoint {min(clip.end, src.duration):.3f}"]
+    return "\n".join(lines) + "\n"
+
+
+def build_fast_merge_command(ffmpeg: str, listing: Path, out: Path, mute: bool) -> list[str]:
+    args = [ffmpeg, *FFMPEG_HEAD, "-f", "concat", "-safe", "0", "-i", str(listing), "-map", "0:v:0?"]
+    if not mute:
+        args += ["-map", "0:a:0?"]
+    return args + ["-c", "copy", "-avoid_negative_ts", "make_zero", str(out)]
+
+
+def describe_merge(req: MergeRequest, canvas: tuple[int, int] | None) -> str:
+    parts = [f"Merge · {len(req.clips)} clips"]
+    if req.fast:
+        parts.append("Fast")
+    elif req.format == "mp3":
+        parts.append("MP3")
+    elif canvas:
+        parts.append(f"{canvas[0]}×{canvas[1]}")
+    if req.mute and req.format == "mp4":
+        parts.append("no audio")
+    return " · ".join(parts)
+
+
+def merge_output_name(names: list[str], ext: str) -> str:
+    stem = _safe_stem(names[0])[:70]
+    suffix = f" (merged {len(names)} parts)" if len(set(names)) == 1 else f" + {len(names) - 1} more"
+    return f"{stem}{suffix}.{ext}"
 
 
 # ------------------------------------------------------------------ manager
@@ -230,6 +407,26 @@ def _ttl_hours() -> float:
         return float(os.environ.get("CLIPAWESOME_DOWNLOAD_TTL_HOURS", "0"))
     except ValueError:
         return 0.0
+
+
+def _rotation(path: Path) -> int:
+    """Display rotation (0/90/180/270): phones often store portrait video sideways plus a rotation flag."""
+    try:
+        with av.open(str(path)) as c:
+            frame = next(c.decode(video=0), None)
+            return int(round(frame.rotation)) % 360 if frame is not None else 0
+    except Exception:
+        return 0
+
+
+def _encoder_label(encodes: bool, enc: gpu.Encoder | None) -> str | None:
+    if not encodes:
+        return None
+    return f"GPU · {enc.name}" if enc else "CPU · x264"
+
+
+def _uses(task: ExportTask, source_id: str) -> bool:
+    return source_id in (task.source_ids or [task.source_id])
 
 
 class EditorManager:
@@ -291,7 +488,7 @@ class EditorManager:
         if ttl <= 0:
             return
         cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl)
-        busy = {t.source_id for t in self._tasks.values() if t.status in ACTIVE}
+        busy = {sid for t in self._tasks.values() if t.status in ACTIVE for sid in (t.source_ids or [t.source_id])}
         for task in list(self._tasks.values()):
             if task.status not in ACTIVE and datetime.fromisoformat(task.finished_at or task.created_at) < cutoff:
                 self._tasks.pop(task.id, None)
@@ -328,6 +525,7 @@ class EditorManager:
             audio_codec=info.audio_codec,
             width=info.width,
             height=info.height,
+            rotation=_rotation(path) if info.has_video else 0,
             fps=info.fps,
             size=path.stat().st_size,
             created_at=now_iso(),
@@ -376,7 +574,7 @@ class EditorManager:
     def delete_source(self, source_id: str) -> bool:
         with self._lock:
             self._load()
-            if any(t.source_id == source_id and t.status in ACTIVE for t in self._tasks.values()):
+            if any(_uses(t, source_id) and t.status in ACTIVE for t in self._tasks.values()):
                 return False
             if self._sources.pop(source_id, None) is None:
                 return False
@@ -397,7 +595,7 @@ class EditorManager:
             task = self._tasks.get(task_id)
             return task.model_copy() if task else None
 
-    def start(self, req: ExportRequest) -> ExportTask:
+    def start(self, req: ExportRequest, use_gpu: bool = False) -> ExportTask:
         src = self.source(req.source_id)
         if src is None:
             raise EditError("That video is no longer available — open it again.")
@@ -405,18 +603,61 @@ class EditorManager:
         ffmpeg = ffmpeg_path()
         if ffmpeg is None:
             raise EditError("FFmpeg is not available on this server.")
+        name = output_name(src.name, req, Path(src.path).suffix)
         task = ExportTask(
             id="e_" + uuid.uuid4().hex[:12],
             source_id=src.id,
+            source_ids=[src.id],
             source_name=src.name,
             label=describe(req),
-            format=Path(output_name(src.name, req, Path(src.path).suffix)).suffix.lstrip("."),
+            format=Path(name).suffix.lstrip("."),
             created_at=now_iso(),
         )
+        out = self._exp_dir(task.id) / name
+        total = max(0.1, min(req.end, src.duration) - req.start)
+        encodes = req.format == "mp4" and not req.fast
+        return self._submit(task, ffmpeg, lambda codec: build_command(ffmpeg, src, req, out, codec), out, total, encodes, use_gpu)
+
+    def start_merge(self, req: MergeRequest, use_gpu: bool = False) -> ExportTask:
+        items: list[tuple[MergeClip, EditSource]] = []
+        for n, clip in enumerate(req.clips, 1):
+            src = self.source(clip.source_id)
+            if src is None:
+                raise EditError(f"Clip {n} is no longer available — remove it and add it again.")
+            items.append((clip, src))
+        validate_merge(req, items)
+        ffmpeg = ffmpeg_path()
+        if ffmpeg is None:
+            raise EditError("FFmpeg is not available on this server.")
+        first_video = next((s for _, s in items if s.has_video), None)
+        canvas = merge_canvas(req, first_video) if first_video and req.format == "mp4" else None
+        ext = (Path(items[0][1].path).suffix.lstrip(".").lower() or "mp4") if req.fast else req.format
+        names = [s.name for _, s in items]
+        task = ExportTask(
+            id="e_" + uuid.uuid4().hex[:12],
+            source_id=items[0][1].id,
+            source_ids=list(dict.fromkeys(s.id for _, s in items)),
+            source_name=f"{names[0]} + {len(names) - 1} more",
+            label=describe_merge(req, canvas),
+            format=ext,
+            created_at=now_iso(),
+        )
+        folder = self._exp_dir(task.id)
+        out = folder / merge_output_name(names, ext)
+        total = max(0.1, sum(min(c.end, s.duration) - c.start for c, s in items))
+        if req.fast:
+            folder.mkdir(parents=True, exist_ok=True)
+            listing = folder / "clips.ffconcat"
+            listing.write_text(ffconcat(items), encoding="utf-8")
+            return self._submit(task, ffmpeg, lambda _codec: build_fast_merge_command(ffmpeg, listing, out, req.mute), out, total, False, False)
+        build = lambda codec: build_merge_command(ffmpeg, items, req, out, codec)  # noqa: E731
+        return self._submit(task, ffmpeg, build, out, total, req.format == "mp4", use_gpu)
+
+    def _submit(self, task: ExportTask, ffmpeg: str, build: Callable[[str | None], list[str]], out: Path, total: float, encodes: bool, use_gpu: bool) -> ExportTask:
         with self._lock:
             self._tasks[task.id] = task
         self._save_task(task)
-        self._executor.submit(self._run, task.id, ffmpeg, src, req)
+        self._executor.submit(self._run, task.id, ffmpeg, build, out, total, encodes, use_gpu)
         return task.model_copy()
 
     def cancel(self, task_id: str) -> ExportTask | None:
@@ -462,40 +703,48 @@ class EditorManager:
         if persist:
             self._save_task(snapshot)
 
-    def _run(self, task_id: str, ffmpeg: str, src: EditSource, req: ExportRequest) -> None:
+    def _exec(self, task_id: str, cmd: list[str], total: float, log_path: Path) -> int:
+        with log_path.open("w", encoding="utf-8", errors="replace") as log_fh:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=log_fh,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            with self._lock:
+                self._procs[task_id] = proc
+            speed: float | None = None
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                key, _, value = line.strip().partition("=")
+                if key == "speed" and value.endswith("x"):
+                    try:
+                        speed = float(value[:-1])
+                    except ValueError:
+                        speed = None
+                elif key in ("out_time_us", "out_time_ms") and value.lstrip("-").isdigit():
+                    done = max(0.0, int(value) / 1_000_000)
+                    eta = (total - done) / speed if speed else None
+                    self._update(task_id, progress=min(0.99, done / total), speed=speed, eta=eta)
+            return proc.wait()
+
+    def _run(self, task_id: str, ffmpeg: str, build: Callable[[str | None], list[str]], out: Path, total: float, encodes: bool, use_gpu: bool) -> None:
+        folder = self._exp_dir(task_id)
+        log_path = folder / "ffmpeg.log"
+        enc = gpu.detect(ffmpeg).encoder if encodes and use_gpu else None
         if task_id in self._cancel:
             self._cancel.discard(task_id)
+            (folder / "clips.ffconcat").unlink(missing_ok=True)
             return
-        folder = self._exp_dir(task_id)
-        out = folder / output_name(src.name, req, Path(src.path).suffix)
-        total = max(0.1, min(req.end, src.duration) - req.start)
-        log_path = folder / "ffmpeg.log"
-        self._update(task_id, persist=True, status="running", progress=0.0)
+        self._update(task_id, persist=True, status="running", progress=0.0, encoder=_encoder_label(encodes, enc))
         try:
-            with log_path.open("w", encoding="utf-8", errors="replace") as log_fh:
-                proc = subprocess.Popen(
-                    build_command(ffmpeg, src, req, out),
-                    stdout=subprocess.PIPE,
-                    stderr=log_fh,
-                    text=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                with self._lock:
-                    self._procs[task_id] = proc
-                speed: float | None = None
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    key, _, value = line.strip().partition("=")
-                    if key == "speed" and value.endswith("x"):
-                        try:
-                            speed = float(value[:-1])
-                        except ValueError:
-                            speed = None
-                    elif key in ("out_time_us", "out_time_ms") and value.lstrip("-").isdigit():
-                        done = max(0.0, int(value) / 1_000_000)
-                        eta = (total - done) / speed if speed else None
-                        self._update(task_id, progress=min(0.99, done / total), speed=speed, eta=eta)
-                code = proc.wait()
+            code = self._exec(task_id, build(enc.codec if enc else None), total, log_path)
+            if code != 0 and enc is not None and task_id not in self._cancel:
+                log.warning("Export %s: %s encode failed, retrying on the CPU", task_id, enc.name)
+                self._update(task_id, persist=True, progress=0.0, speed=None, eta=None, encoder="CPU · x264 (GPU failed)")
+                out.unlink(missing_ok=True)
+                code = self._exec(task_id, build(None), total, log_path)
             if task_id in self._cancel:
                 raise InterruptedError
             if code != 0 or not out.is_file():
@@ -520,3 +769,4 @@ class EditorManager:
             with self._lock:
                 self._procs.pop(task_id, None)
             self._cancel.discard(task_id)
+            (folder / "clips.ffconcat").unlink(missing_ok=True)

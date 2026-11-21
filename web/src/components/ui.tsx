@@ -210,6 +210,18 @@ export function Field({ label, hint, children, className }: { label: ReactNode; 
   );
 }
 
+export function ToolSection({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="space-y-2.5">
+      <div>
+        <div className="text-[11px] font-medium uppercase tracking-wider text-fg-3">{title}</div>
+        {hint && <div className="mt-0.5 text-[12px] text-fg-3">{hint}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export const inputClass =
   "w-full h-10 rounded-xl bg-ink-900/70 border border-white/[0.08] px-3.5 text-sm text-fg placeholder:text-fg-3 outline-none transition duration-200 focus:border-violet/60 focus:ring-4 focus:ring-violet/15 disabled:opacity-50";
 

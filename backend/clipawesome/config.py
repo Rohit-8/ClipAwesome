@@ -93,6 +93,7 @@ class Settings(BaseModel):
     caption_languages: list[str] = Field(default_factory=lambda: ["en"])
     youtube_api_key: str = ""
     proxy: str = ""
+    gpu_acceleration: bool = True
     ai: AISettings = Field(default_factory=AISettings)
     weights: ScoringWeights = Field(default_factory=ScoringWeights)
 

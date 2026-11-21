@@ -23,7 +23,7 @@ import { Button, Card, Field, Input, Notice, SectionTitle, Segmented, Select, Sl
 import { api } from "../lib/api";
 import { useApp } from "../lib/app-context";
 import { cx } from "../lib/format";
-import type { AISettings, CheckResult, Provider, Settings, Weights } from "../lib/types";
+import type { AISettings, CheckResult, GpuStatus, Provider, Settings, Weights } from "../lib/types";
 
 const PROVIDERS: { value: Provider; name: string; blurb: string; icon: ReactNode; keyUrl?: string }[] = [
   { value: "custom", name: "Custom", blurb: "Any OpenAI-compatible endpoint", icon: <Server className="size-4" /> },
@@ -52,6 +52,7 @@ const SECTIONS = [
   { id: "analysis", label: "Analysis defaults", icon: <SlidersHorizontal className="size-4" /> },
   { id: "transcription", label: "Transcription", icon: <Mic className="size-4" /> },
   { id: "network", label: "YouTube & network", icon: <Globe className="size-4" /> },
+  { id: "gpu", label: "Editor & GPU", icon: <Cpu className="size-4" /> },
   { id: "weights", label: "Scoring weights", icon: <ListRestart className="size-4" /> },
 ];
 
@@ -65,6 +66,43 @@ function Result({ r }: { r: CheckResult | null }) {
   );
 }
 
+function GpuInfo({ status, busy, onDetect }: { status: GpuStatus | null; busy: boolean; onDetect: () => void }) {
+  const checked = !!status && (status.encoder !== null || status.tried.length > 0);
+  return (
+    <div className="space-y-3 rounded-xl border border-white/[0.06] bg-black/20 p-4">
+      {!status ? (
+        <div className="h-5 w-56 animate-pulse rounded bg-white/[0.05]" />
+      ) : !status.ffmpeg ? (
+        <p className="text-[13px] text-fg-3">FFmpeg is not available on this server, so exports can't run.</p>
+      ) : status.encoder ? (
+        <Result r={{ ok: true, message: `Using ${status.encoder.name} (${status.encoder.codec}) for video exports and merges.` }} />
+      ) : checked ? (
+        <p className="text-[13px] text-fg-2">No usable GPU encoder was found, so video exports use the CPU (x264).</p>
+      ) : (
+        <p className="text-[13px] text-fg-2">Not checked yet. Save to turn it on, or detect now to see what this machine supports.</p>
+      )}
+      {status && status.tried.length > 0 && (
+        <ul className="space-y-1.5 text-[12.5px]">
+          {status.tried.map((t) => (
+            <li key={t.codec} className="flex items-start gap-2">
+              {t.ok ? <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-pos" /> : <CircleX className="mt-0.5 size-3.5 shrink-0 text-fg-3" />}
+              <span className="text-fg">{t.name}</span>
+              <span className="min-w-0 truncate text-fg-3" title={t.detail}>
+                {t.detail}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {status?.ffmpeg && (
+        <Button size="sm" onClick={onDetect} loading={busy} icon={<RefreshCw className="size-3.5" />}>
+          {checked ? "Detect again" : "Detect now"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { refresh } = useApp();
   const toast = useToast();
@@ -74,7 +112,8 @@ export function SettingsPage() {
   const [models, setModels] = useState<string[]>([]);
   const [aiResult, setAiResult] = useState<CheckResult | null>(null);
   const [ytResult, setYtResult] = useState<CheckResult | null>(null);
-  const [busy, setBusy] = useState<"" | "save" | "test" | "models" | "yt">("");
+  const [gpu, setGpu] = useState<GpuStatus | null>(null);
+  const [busy, setBusy] = useState<"" | "save" | "test" | "models" | "yt" | "gpu">("");
 
   useEffect(() => {
     Promise.all([api.settings(), api.providers()])
@@ -84,6 +123,10 @@ export function SettingsPage() {
         setProviders(p);
       })
       .catch((e: Error) => toast(e.message, "error"));
+    api
+      .gpuStatus()
+      .then(setGpu)
+      .catch(() => setGpu({ enabled: false, ffmpeg: false, encoder: null, tried: [] }));
   }, [toast]);
 
   const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(saved), [form, saved]);
@@ -119,6 +162,7 @@ export function SettingsPage() {
       setSaved(res);
       setForm(res);
       refresh();
+      if (res.gpu_acceleration !== saved.gpu_acceleration) api.gpuStatus().then(setGpu).catch(() => {});
       toast("Settings saved", "success");
     } catch (e) {
       toast((e as Error).message, "error");
@@ -169,6 +213,17 @@ export function SettingsPage() {
   const resetWeights = async () => {
     const d = await api.defaults();
     set("weights", d.weights);
+  };
+
+  const detectGpu = async () => {
+    setBusy("gpu");
+    try {
+      setGpu(await api.detectGpu());
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy("");
+    }
   };
 
   return (
@@ -442,6 +497,29 @@ export function SettingsPage() {
                 <Result r={ytResult} />
               </div>
             )}
+          </Card>
+
+          <Card id="set-gpu" className="scroll-mt-6 p-6">
+            <SectionTitle
+              icon={<Cpu className="size-4" />}
+              title="Editor & GPU"
+              subtitle="Video exports and merges can use the graphics card's video encoder: usually 2–3× faster, and it leaves the CPU free."
+            />
+            <div className="mt-5 space-y-4">
+              <Toggle
+                checked={form.gpu_acceleration}
+                onChange={(v) => set("gpu_acceleration", v)}
+                label="Use GPU acceleration"
+                description="Finds an NVIDIA (NVENC), Intel (Quick Sync) or AMD (AMF) encoder with a short test encode. If a GPU export fails, it is redone on the CPU automatically. Off: exports always use the CPU."
+              />
+              {form.gpu_acceleration ? (
+                <GpuInfo status={gpu} busy={busy === "gpu"} onDetect={detectGpu} />
+              ) : (
+                <div className="rounded-xl border border-white/[0.06] bg-black/20 p-4 text-[13px] text-fg-2">
+                  GPU acceleration is off. Video exports and merges use the CPU (x264), even if a graphics card is available.
+                </div>
+              )}
+            </div>
           </Card>
 
           <Card id="set-weights" className="scroll-mt-6 p-6">

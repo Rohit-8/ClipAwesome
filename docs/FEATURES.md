@@ -119,6 +119,8 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 | F11.5 | Outputs | MP4 (H.264 + AAC, High/Balanced/Small quality, optional audio removal), MP3, GIF (≤ 60 s, palette-optimised). Output size is previewed before export. |
 | F11.6 | Fast cut | Trim-only stream copy: instant, original quality, keyframe-aligned. |
 | F11.7 | Exports | One export at a time (CPU-friendly); live progress, speed and ETA; cancel; auto-save when done; files expire with `CLIPAWESOME_DOWNLOAD_TTL_HOURS`. |
+| F11.9 | Merge | Join 2–20 clips (uploads or downloads), each with its own start/end, reordered by drag or arrows. Frame = first clip's displayed shape (phone rotation respected) or 16:9 / 9:16 / 1:1, at an optional resolution; other shapes get black bars or fill & crop. Audio-only clips become black video, silent clips get silence so the soundtrack stays continuous. MP3 merge too. Fast merge (stream copy) when every clip shares one format, otherwise a clear reason. |
+| F11.10 | GPU acceleration | Settings toggle (on by default). Finds a working NVIDIA NVENC / Intel Quick Sync / AMD AMF H.264 encoder with a 15-frame test encode, uses it for MP4 exports and merges (quality matched to x264 CRF 18/23/28), and redoes the export on the CPU if the GPU encode fails. Each export shows the encoder it used. Off = always CPU. |
 
 ## F9 — Platform
 

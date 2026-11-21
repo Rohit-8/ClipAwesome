@@ -199,6 +199,7 @@ export interface Settings {
   caption_languages: string[];
   youtube_api_key: string;
   proxy: string;
+  gpu_acceleration: boolean;
   has_youtube_api_key?: boolean;
   ai: AISettings;
   weights: Weights;
@@ -292,6 +293,7 @@ export interface EditSource {
   audio_codec: string | null;
   width: number | null;
   height: number | null;
+  rotation: number;
   fps: number | null;
   size: number;
   created_at: string;
@@ -321,12 +323,34 @@ export interface ExportRequest {
   fast: boolean;
 }
 
+export type MergeFrame = "first" | "16:9" | "9:16" | "1:1";
+
+export interface MergeRequest {
+  clips: { source_id: string; start: number; end: number }[];
+  frame: MergeFrame;
+  fit: "pad" | "crop";
+  resolution: number | null;
+  mute: boolean;
+  format: "mp4" | "mp3";
+  quality: "high" | "balanced" | "small";
+  fast: boolean;
+}
+
+export interface GpuStatus {
+  enabled: boolean;
+  ffmpeg: boolean;
+  encoder: { codec: string; name: string } | null;
+  tried: { codec: string; name: string; ok: boolean; detail: string }[];
+}
+
 export interface ExportTask {
   id: string;
   source_id: string;
+  source_ids: string[];
   source_name: string;
   label: string;
   format: string;
+  encoder: string | null;
   status: "queued" | "running" | "done" | "error" | "cancelled";
   progress: number;
   speed: number | null;

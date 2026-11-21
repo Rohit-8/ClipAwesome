@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from .. import __version__, pipeline
+from .. import __version__, gpu, pipeline
 from .. import config as cfg
 from .. import downloads as dl
 from .. import editor as ed
@@ -477,9 +477,41 @@ def editor_delete_source(source_id: str) -> Response:
 @app.post("/api/editor/exports", status_code=202)
 def editor_start_export(req: ed.ExportRequest) -> ed.ExportTask:
     try:
-        return editor.start(req)
+        return editor.start(req, use_gpu=settings_store.load().gpu_acceleration)
     except ed.EditError as err:
         raise HTTPException(400, str(err)) from err
+
+
+@app.post("/api/editor/merges", status_code=202)
+def editor_start_merge(req: ed.MergeRequest) -> ed.ExportTask:
+    try:
+        return editor.start_merge(req, use_gpu=settings_store.load().gpu_acceleration)
+    except ed.EditError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+def _gpu_status(force: bool) -> dict[str, Any]:
+    enabled = settings_store.load().gpu_acceleration
+    ffmpeg = dl.ffmpeg_path()
+    report = gpu.detect(ffmpeg, refresh=force) if ffmpeg and (enabled or force) else None
+    encoder = report.encoder if report else None
+    return {
+        "enabled": enabled,
+        "ffmpeg": ffmpeg is not None,
+        "encoder": {"codec": encoder.codec, "name": encoder.name} if encoder else None,
+        "tried": report.tried if report else [],
+    }
+
+
+@app.get("/api/editor/gpu")
+def editor_gpu() -> dict[str, Any]:
+    return _gpu_status(force=False)
+
+
+@app.post("/api/editor/gpu/detect")
+def editor_gpu_detect() -> dict[str, Any]:
+    # POST: re-running test encodes is an explicit action, not something a page load should trigger.
+    return _gpu_status(force=True)
 
 
 @app.get("/api/editor/exports")
