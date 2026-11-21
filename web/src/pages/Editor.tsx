@@ -883,14 +883,16 @@ export function EditorPage() {
           <h1 className="text-[28px] font-semibold tracking-tight text-fg">Editor</h1>
           <p className="mt-1 text-[14px] text-fg-2">Trim, crop, convert and merge videos with FFmpeg on this server. Nothing is sent anywhere else.</p>
         </div>
-        <Segmented
-          value={merging ? "merge" : "edit"}
-          onChange={(v) => navigate(v === "merge" ? (source ? `editor?mode=merge&add=${source.id}` : "editor?mode=merge") : "editor")}
-          options={[
-            { value: "edit", label: "Edit a video", icon: <Scissors className="size-3.5" /> },
-            { value: "merge", label: "Merge videos", icon: <Merge className="size-3.5" /> },
-          ]}
-        />
+        <div className="shrink-0">
+          <Segmented
+            value={merging ? "merge" : "edit"}
+            onChange={(v) => navigate(v === "merge" ? (source ? `editor?mode=merge&add=${source.id}` : "editor?mode=merge") : "editor")}
+            options={[
+              { value: "edit", label: "Edit a video", icon: <Scissors className="size-3.5" /> },
+              { value: "merge", label: "Merge videos", icon: <Merge className="size-3.5" /> },
+            ]}
+          />
+        </div>
       </div>
 
       {merging ? (

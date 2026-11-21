@@ -388,7 +388,7 @@ export function Results({ id }: { id: string }) {
                 />
               </Card>
             ) : (
-              <div className="space-y-3 xl:max-h-[calc(100vh-130px)] xl:overflow-y-auto xl:pr-1">
+              <div className="space-y-3 xl:max-h-[calc(100vh-186px)] xl:overflow-y-auto xl:pr-1">
                 {listClips.map((c) => (
                   <ClipCard
                     key={c.id}

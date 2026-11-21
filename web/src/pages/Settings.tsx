@@ -549,7 +549,7 @@ export function SettingsPage() {
 
       <div
         className={cx(
-          "pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-5 transition-all duration-300 md:pl-[248px]",
+          "pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-5 transition-all duration-300 md:pl-(--sidebar-w)",
           dirty ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0",
         )}
       >

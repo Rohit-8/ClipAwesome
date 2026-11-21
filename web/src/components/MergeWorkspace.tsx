@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp, AudioWaveform, CloudUpload, Film, GripVertical, Merge, Pause, Play, Plus, Trash2, Zap } from "lucide-react";
-import type { DragEvent } from "react";
+import { ArrowDown, ArrowUp, AudioWaveform, CloudUpload, Film, GripVertical, Merge, MonitorPlay, Pause, Play, Plus, Scissors, Trash2, Zap } from "lucide-react";
+import type { DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { browserDecodes, useCompatAudio } from "../lib/compat-audio";
@@ -194,6 +194,241 @@ function ClipPreview({ clip, index, onChange }: { clip: Clip; index: number; onC
   );
 }
 
+// ------------------------------------------------------------------ merged preview
+
+function mediaSrc(s: EditSource): string {
+  return !s.has_video && s.has_audio && browserDecodes(s.audio_codec) !== true ? api.editorPreviewAudioUrl(s.id) : api.editorMediaUrl(s.id);
+}
+
+/**
+ * Plays every clip's selected range back to back inside the output frame. Two video elements take turns:
+ * one plays while the other is already loaded at the next clip's start, so cuts are near-seamless.
+ */
+function MergedPreview({ clips, frame, fit, mute }: { clips: Clip[]; frame: [number, number] | null; fit: "pad" | "crop"; mute: boolean }) {
+  const a = useRef<HTMLVideoElement>(null);
+  const b = useRef<HTMLVideoElement>(null);
+  const slots = useMemo(() => [a, b], []);
+  const bar = useRef<HTMLDivElement>(null);
+  const initial = [0, clips.length > 1 ? 1 : -1];
+  const rt = useRef({ front: 0, assign: [...initial], pending: [null, null] as (number | null)[] });
+  const [assign, setAssign] = useState(initial);
+  const [front, setFront] = useState(0);
+  const [time, setTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+
+  const offsets = useMemo(() => {
+    let acc = 0;
+    return clips.map((c) => {
+      const at = acc;
+      acc += c.end - c.start;
+      return at;
+    });
+  }, [clips]);
+  const total = clips.reduce((sum, c) => sum + (c.end - c.start), 0);
+
+  const srcA = clips[assign[0]]?.source;
+  const srcB = clips[assign[1]]?.source;
+  useCompatAudio(a, srcA?.has_audio ? api.editorPreviewAudioUrl(srcA.id) : null, { codec: srcA?.audio_codec, enabled: !!srcA?.has_video && !!srcA.has_audio });
+  useCompatAudio(b, srcB?.has_audio ? api.editorPreviewAudioUrl(srcB.id) : null, { codec: srcB?.audio_codec, enabled: !!srcB?.has_video && !!srcB.has_audio });
+
+  const load = useCallback(
+    (slot: number, index: number, offset: number) => {
+      const v = slots[slot].current;
+      const c = clips[index];
+      if (!v || !c) return;
+      const url = mediaSrc(c.source);
+      const t = c.start + Math.max(0, offset);
+      if (v.getAttribute("src") !== url) {
+        rt.current.pending[slot] = t;
+        v.src = url;
+      } else if (v.readyState >= 1) v.currentTime = t;
+      else rt.current.pending[slot] = t;
+      rt.current.assign[slot] = index;
+      setAssign([...rt.current.assign]);
+    },
+    [clips, slots],
+  );
+
+  useEffect(() => {
+    load(0, 0, 0);
+    if (clips.length > 1) load(1, 1, 0);
+  }, [load, clips.length]);
+
+  useEffect(() => {
+    for (const s of slots) if (s.current) s.current.muted = mute;
+  }, [mute, slots]);
+
+  const onMeta = (slot: number) => () => {
+    const v = slots[slot].current;
+    const t = rt.current.pending[slot];
+    if (v && t != null) {
+      v.currentTime = t;
+      rt.current.pending[slot] = null;
+    }
+  };
+
+  const advance = useCallback(
+    (next: number) => {
+      const r = rt.current;
+      const f = r.front;
+      const back = 1 - f;
+      slots[f].current?.pause();
+      if (r.assign[back] !== next) load(back, next, 0);
+      r.front = back;
+      setFront(back);
+      void slots[back].current?.play().catch(() => {});
+      if (next + 1 < clips.length) load(f, next + 1, 0);
+    },
+    [clips.length, load, slots],
+  );
+
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const r = rt.current;
+      const v = slots[r.front].current;
+      const i = r.assign[r.front];
+      const c = clips[i];
+      if (v && c && r.pending[r.front] == null) {
+        if (v.currentTime >= c.end - 0.03 || v.ended) {
+          if (i + 1 >= clips.length) {
+            v.pause();
+            setPlaying(false);
+            setTime(total);
+            return;
+          }
+          advance(i + 1);
+        } else setTime(offsets[i] + Math.max(0, v.currentTime - c.start));
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, clips, offsets, total, advance, slots]);
+
+  const seek = (t: number) => {
+    const target = Math.min(Math.max(0, t), Math.max(0, total - 0.05));
+    let i = 0;
+    while (i + 1 < offsets.length && offsets[i + 1] <= target) i++;
+    const r = rt.current;
+    if (r.assign[r.front] !== i && r.assign[1 - r.front] === i) {
+      slots[r.front].current?.pause();
+      r.front = 1 - r.front;
+      setFront(r.front);
+    }
+    load(r.front, i, target - offsets[i]);
+    const other = 1 - r.front;
+    if (i + 1 < clips.length && r.assign[other] !== i + 1) load(other, i + 1, 0);
+    if (playing) void slots[r.front].current?.play().catch(() => {});
+    setTime(target);
+  };
+
+  const toggle = () => {
+    const v = slots[rt.current.front].current;
+    if (!v) return;
+    if (playing) {
+      v.pause();
+      setPlaying(false);
+      return;
+    }
+    if (time >= total - 0.06) seek(0);
+    void slots[rt.current.front].current?.play().catch(() => {});
+    setPlaying(true);
+  };
+
+  const scrub = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = bar.current!.getBoundingClientRect();
+    seek(((e.clientX - rect.left) / rect.width) * total);
+  };
+
+  const index = Math.max(0, assign[front]);
+  const cur = clips[index];
+  const [w, h] = frame ?? [16, 9];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-center rounded-2xl bg-black/40 p-3 ring-1 ring-inset ring-white/[0.04]">
+        <div
+          className="relative overflow-hidden rounded-lg bg-black"
+          style={frame ? { aspectRatio: `${w} / ${h}`, width: `min(100%, calc(44vh * ${w / h}))` } : { width: "100%", height: 150 }}
+        >
+          {slots.map((ref, slot) => (
+            <video
+              key={slot}
+              ref={ref}
+              preload="auto"
+              playsInline
+              onLoadedMetadata={onMeta(slot)}
+              onClick={toggle}
+              className={cx(
+                "absolute inset-0 size-full",
+                fit === "crop" ? "object-cover" : "object-contain",
+                frame && slot === front ? "opacity-100" : "pointer-events-none opacity-0",
+              )}
+            />
+          ))}
+          {frame && cur && !cur.source.has_video && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[12px] text-fg-3">Black frame · audio-only clip</div>
+          )}
+          {!frame && (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-fg-3">
+              <AudioWaveform className="size-9" />
+              <span className="text-[12px]">MP3 · audio only</span>
+            </div>
+          )}
+          <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white tabular">
+            Clip {index + 1} / {clips.length}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" size="sm" icon={playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />} onClick={toggle}>
+          {playing ? "Pause" : "Play merged"}
+        </Button>
+        <span className="tabular text-[13px] text-fg-2">
+          {fmtDuration(time)} <span className="text-fg-3">/ {fmtDuration(total)}</span>
+        </span>
+        {mute && frame && <Badge tone="neutral">Audio removed</Badge>}
+        <span className="ml-auto min-w-0 truncate text-[12px] text-fg-3" title={cur?.source.name}>
+          {cur?.source.name}
+        </span>
+      </div>
+
+      <div
+        ref={bar}
+        role="slider"
+        aria-label="Merged video position"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={time}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          scrub(e);
+        }}
+        onPointerMove={(e) => e.buttons === 1 && scrub(e)}
+        className="relative flex h-9 cursor-pointer overflow-hidden rounded-lg ring-1 ring-inset ring-white/[0.06]"
+        style={{ touchAction: "none" }}
+      >
+        {clips.map((c, i) => (
+          <div
+            key={c.key}
+            className={cx(
+              "flex items-center truncate border-l border-black/60 px-1.5 text-[11px] font-medium first:border-l-0",
+              i === index ? "bg-accent/30 text-white" : i % 2 ? "bg-white/[0.08] text-fg-2" : "bg-white/[0.04] text-fg-2",
+            )}
+            style={{ flexGrow: c.end - c.start, flexBasis: 0, minWidth: 0 }}
+          >
+            {i + 1}
+          </div>
+        ))}
+        <div className="pointer-events-none absolute -inset-y-0.5 w-0.5 -translate-x-1/2 rounded-full bg-white" style={{ left: `${total ? (time / total) * 100 : 0}%` }} />
+      </div>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ workspace
 
 export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onStarted: (task: ExportTask) => void }) {
@@ -204,6 +439,7 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
   const [clips, setClips] = useState<Clip[]>([]);
   const [restored, setRestored] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [view, setView] = useState<"merged" | "clip">("merged");
   const [upload, setUpload] = useState<{ name: string; progress: number } | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
@@ -261,6 +497,7 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
     const clip = { key: newKey(), source, start: 0, end: source.duration };
     setClips((prev) => [...prev, clip]);
     setSelected(clip.key);
+    setView("clip");
   };
 
   const addDownload = async (d: DownloadTask) => {
@@ -322,6 +559,13 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
   const total = clips.reduce((sum, c) => sum + (c.end - c.start), 0);
   const current = clips.find((c) => c.key === selected) ?? null;
   const autoShort = firstVideo ? Math.min(...displaySize(firstVideo)) : null;
+  const previewFrame: [number, number] | null = fmt === "mp3" ? null : (canvas ?? (firstVideo ? displaySize(firstVideo) : null));
+  const previewKey = clips.map((c) => `${c.key}:${c.start}:${c.end}`).join("|");
+  const showClip = view === "clip" && current !== null;
+  const pick = (key: string) => {
+    setSelected(key);
+    setView("clip");
+  };
 
   // Joining without re-encoding only works for identical streams; flag obvious mismatches before the server does.
   const fastMismatch = useMemo(() => {
@@ -358,13 +602,49 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
   return (
     <div className="grid animate-fade-up gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="min-w-0 space-y-5">
+        {clips.length > 0 && (
+          <Card className="p-4 md:p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <Segmented
+                size="sm"
+                value={showClip ? "clip" : "merged"}
+                onChange={setView}
+                options={[
+                  { value: "merged", label: "Merged result", icon: <MonitorPlay className="size-3.5" /> },
+                  {
+                    value: "clip",
+                    label: current ? `Trim clip ${clips.findIndex((c) => c.key === current.key) + 1}` : "Trim a clip",
+                    icon: <Scissors className="size-3.5" />,
+                    disabled: !current,
+                  },
+                ]}
+              />
+              <span className="text-[12px] text-fg-3">
+                {showClip
+                  ? "Set where this clip starts and ends."
+                  : `All clips in order, framed like the export${previewFrame ? ` · ${previewFrame[0]}×${previewFrame[1]}` : ""} · ${formatLength(total)}`}
+              </span>
+            </div>
+            {showClip && current ? (
+              <ClipPreview
+                key={current.key}
+                clip={current}
+                index={clips.findIndex((c) => c.key === current.key)}
+                onChange={(s, e) => update(current.key, s, e)}
+              />
+            ) : (
+              <MergedPreview key={previewKey} clips={clips} frame={previewFrame} fit={useFast ? "pad" : fit} mute={fmt === "mp4" && mute} />
+            )}
+          </Card>
+        )}
+
         <Card className="p-4 md:p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h3 className="text-[14px] font-semibold text-fg">
                 Clips<span className="ml-2 text-fg-3">{clips.length}</span>
               </h3>
-              <p className="text-[12px] text-fg-3">Drag to reorder. Select a clip to preview it and set its start and end.</p>
+              <p className="text-[12px] text-fg-3">Drag to reorder. Select a clip to trim it; “Merged result” plays them all in order.</p>
             </div>
             {clips.length > 0 && (
               <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={() => setClips([])}>
@@ -387,7 +667,7 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
                     key={c.key}
                     type="button"
                     tabIndex={-1}
-                    onClick={() => setSelected(c.key)}
+                    onClick={() => pick(c.key)}
                     className={cx(
                       "min-w-[22px] truncate px-1.5 text-[11px] font-medium transition-colors",
                       c.key === selected ? "bg-accent text-white" : i % 2 ? "bg-white/[0.09] text-fg-2" : "bg-white/[0.05] text-fg-2",
@@ -408,7 +688,7 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
                     onDragEnd={() => setDragKey(null)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => onDropRow(e, i)}
-                    onClick={() => setSelected(c.key)}
+                    onClick={() => pick(c.key)}
                     className={cx(
                       "flex cursor-pointer items-center gap-2.5 rounded-xl border p-2 pr-1.5 transition-colors",
                       c.key === selected ? "border-accent/50 bg-accent/[0.08]" : "border-white/[0.06] bg-black/20 hover:border-white/[0.12]",
@@ -465,17 +745,6 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
             </>
           )}
         </Card>
-
-        {current && (
-          <Card className="p-4 md:p-5">
-            <ClipPreview
-              key={current.key}
-              clip={current}
-              index={clips.findIndex((c) => c.key === current.key)}
-              onChange={(s, e) => update(current.key, s, e)}
-            />
-          </Card>
-        )}
 
         <Card className="p-4 md:p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
