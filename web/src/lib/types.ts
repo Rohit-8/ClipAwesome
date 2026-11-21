@@ -343,6 +343,16 @@ export interface GpuStatus {
   tried: { codec: string; name: string; ok: boolean; detail: string }[];
 }
 
+export interface PreviewStatus {
+  video_id: string;
+  status: "none" | "downloading" | "ready" | "error";
+  progress: number;
+  size: number | null;
+  audio_codec: string | null;
+  reused_download: boolean;
+  error: string | null;
+}
+
 export interface ExportTask {
   id: string;
   source_id: string;

@@ -14,6 +14,7 @@ import type {
   Health,
   Job,
   MergeRequest,
+  PreviewStatus,
   Settings,
 } from "./types";
 
@@ -110,6 +111,10 @@ export const api = {
   analysis: (id: string) => request<Analysis>("GET", `/analyses/${encodeURIComponent(id)}`),
   deleteAnalysis: (id: string) => request<void>("DELETE", `/analyses/${encodeURIComponent(id)}`),
   mediaUrl: (mediaId: string) => `/api/media/${encodeURIComponent(mediaId)}`,
+  youtubePreview: (videoId: string) => request<PreviewStatus>("GET", `/youtube/${encodeURIComponent(videoId)}/preview`),
+  startYoutubePreview: (videoId: string) => request<PreviewStatus>("POST", `/youtube/${encodeURIComponent(videoId)}/preview`),
+  youtubePreviewMediaUrl: (videoId: string) => `/api/youtube/${encodeURIComponent(videoId)}/preview/media`,
+  youtubePreviewAudioUrl: (videoId: string) => `/api/youtube/${encodeURIComponent(videoId)}/preview/audio`,
   downloadFormats: (url: string) => request<DownloadInfo>("POST", "/download/formats", { url }),
   startDownload: (url: string, option_id: string) => request<DownloadTask>("POST", "/downloads", { url, option_id }),
   downloads: () => request<DownloadTask[]>("GET", "/downloads"),

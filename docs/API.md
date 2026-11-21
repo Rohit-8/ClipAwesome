@@ -64,6 +64,8 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | DELETE | `/analyses/{id}` | `204` |
 | GET | `/media/{media_id}` | Media stream (supports `Range`) for local sources |
 | GET | `/media/{media_id}/preview-audio` | Cached MP3 copy of the audio for browsers that can't decode the original codec |
+| GET / POST | `/youtube/{video_id}/preview` | `PreviewStatus` — `{video_id, status: none\|downloading\|ready\|error, progress, size, audio_codec, reused_download, error}`. POST starts fetching a 360p playable copy through the server (proxy); a finished MP4/WebM download of the same video is reused. Used when YouTube's embedded player can't load in the browser. |
+| GET | `/youtube/{video_id}/preview/media` / `/preview/audio` | The playable copy (supports `Range`) / its cached MP3 audio |
 
 ### YouTube downloads
 

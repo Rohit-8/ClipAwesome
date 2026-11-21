@@ -18,6 +18,7 @@ from .. import __version__, gpu, pipeline
 from .. import config as cfg
 from .. import downloads as dl
 from .. import editor as ed
+from .. import previews as pv
 from ..ai.llm import LLMClient, LLMError
 from ..config import PROVIDER_DEFAULTS, WEB_DIST, AISettings, Settings, SettingsStore, _merge_secret, ensure_dirs, public_settings
 from ..jobs import JobManager
@@ -36,6 +37,7 @@ store = Store()
 jobs = JobManager(store)
 downloads = dl.DownloadManager()
 editor = ed.EditorManager()
+yt_previews = pv.PreviewManager(downloads)
 
 
 @asynccontextmanager
@@ -332,6 +334,45 @@ def media_preview_audio(media_id: str) -> FileResponse:
     except ed.EditError as err:
         raise HTTPException(500, str(err)) from err
     return FileResponse(preview, media_type="audio/mpeg")
+
+
+# ---- YouTube playback copies (when the browser can't show YouTube's own player) ------------------
+
+
+def _preview_call(fn, video_id: str):
+    try:
+        return fn(video_id)
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@app.get("/api/youtube/{video_id}/preview")
+def youtube_preview_status(video_id: str) -> pv.PreviewStatus:
+    return _preview_call(yt_previews.status, video_id)
+
+
+@app.post("/api/youtube/{video_id}/preview", status_code=202)
+def youtube_preview_start(video_id: str) -> pv.PreviewStatus:
+    return _preview_call(yt_previews.start, video_id)
+
+
+@app.get("/api/youtube/{video_id}/preview/media")
+def youtube_preview_media(video_id: str) -> FileResponse:
+    path = _preview_call(yt_previews.file, video_id)
+    if path is None:
+        raise HTTPException(404, "No playable copy yet")
+    return FileResponse(path)
+
+
+@app.get("/api/youtube/{video_id}/preview/audio")
+def youtube_preview_audio(video_id: str) -> FileResponse:
+    try:
+        path = _preview_call(yt_previews.audio, video_id)
+    except ed.EditError as err:
+        raise HTTPException(500, str(err)) from err
+    if path is None:
+        raise HTTPException(404, "No playable copy yet")
+    return FileResponse(path, media_type="audio/mpeg")
 
 
 # ---- YouTube downloads --------------------------------------------------------------------------
