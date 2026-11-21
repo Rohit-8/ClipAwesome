@@ -231,26 +231,28 @@ export function Results({ id }: { id: string }) {
     [id, toast],
   );
 
-  // Review shortcuts: A approve, X reject, U undo, J/K or arrows move to the next/previous clip and play it.
+  // Review shortcuts: A approve / X reject (then the next clip plays), U undo, J/K or arrows move to the next/previous clip.
   useEffect(() => {
-    if (!reviewing) return;
+    if (!reviewing || editing || exporting) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.ctrlKey || e.metaKey || e.altKey || !listClips.length) return;
-      const idx = Math.max(0, listClips.findIndex((c) => c.id === activeClip));
-      const cur = listClips[idx];
+      // The active clip can be missing from the list, e.g. after approving it under “To review”.
+      const idx = listClips.findIndex((c) => c.id === activeClip);
+      const cur = idx >= 0 ? listClips[idx] : null;
       const key = e.key.toLowerCase();
-      if (key === "a") void review(cur, "approved");
-      else if (key === "x") void review(cur, "rejected");
-      else if (key === "u") void review(cur, null);
-      else if (key === "j" || e.key === "ArrowDown") playClip(listClips[Math.min(listClips.length - 1, activeClip ? idx + 1 : 0)]);
+      if ((key === "a" || key === "x") && cur) {
+        void review(cur, key === "a" ? "approved" : "rejected");
+        if (idx + 1 < listClips.length) playClip(listClips[idx + 1]);
+      } else if (key === "u" && cur) void review(cur, null);
+      else if (key === "j" || e.key === "ArrowDown") playClip(listClips[idx < 0 ? 0 : Math.min(listClips.length - 1, idx + 1)]);
       else if (key === "k" || e.key === "ArrowUp") playClip(listClips[Math.max(0, idx - 1)]);
       else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reviewing, listClips, activeClip, review, playClip]);
+  }, [reviewing, editing, exporting, listClips, activeClip, review, playClip]);
 
   if (error) {
     return (
@@ -457,7 +459,7 @@ export function Results({ id }: { id: string }) {
                 />
                 <p className="text-[11.5px] text-fg-3">
                   Keys: <kbd className="rounded bg-white/[0.08] px-1">J</kbd>/<kbd className="rounded bg-white/[0.08] px-1">K</kbd> next/previous and play,{" "}
-                  <kbd className="rounded bg-white/[0.08] px-1">A</kbd> approve, <kbd className="rounded bg-white/[0.08] px-1">X</kbd> reject,{" "}
+                  <kbd className="rounded bg-white/[0.08] px-1">A</kbd> approve, <kbd className="rounded bg-white/[0.08] px-1">X</kbd> reject (the next clip then plays),{" "}
                   <kbd className="rounded bg-white/[0.08] px-1">U</kbd> undo. Decisions are saved with the analysis.
                 </p>
               </div>

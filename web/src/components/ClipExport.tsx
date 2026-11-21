@@ -63,6 +63,7 @@ export function OpenInEditorDialog({ analysis, clip, source, onClose }: { analys
     setBusy(true);
     try {
       const src = await prepareSource(analysis.id, source.id, quality, setDownload, () => stop.current);
+      if (stop.current) return;
       const params = new URLSearchParams({
         source: src.id,
         start: String(clip.start),
@@ -144,27 +145,31 @@ export function ExportClipsDialog({ analysis, onClose }: { analysis: Analysis; o
     return pick === "top" ? ranked.slice(0, top) : ranked;
   }, [pick, top, analysis.clips, approved]);
 
+  const batchId = batch?.id;
   useEffect(() => {
-    if (!batch) return;
+    if (!batchId) return;
     let stopped = false;
-    const timer = window.setInterval(async () => {
+    let timer = 0;
+    const tick = async () => {
       try {
-        const b = batch.status === "preparing" ? await api.exportBatch(batch.id) : batch;
+        const b = await api.exportBatch(batchId);
+        const all = b.export_ids.length ? await api.exports() : [];
         if (stopped) return;
-        if (b !== batch) setBatch(b);
-        if (b.export_ids.length) {
-          const all = await api.exports();
-          if (!stopped) setTasks(b.export_ids.map((id) => all.find((t) => t.id === id)).filter((t): t is ExportTask => !!t));
-        }
+        const mine = b.export_ids.map((id) => all.find((t) => t.id === id)).filter((t): t is ExportTask => !!t);
+        setBatch(b);
+        setTasks(mine);
+        if (b.status !== "preparing" && mine.every((t) => t.status !== "queued" && t.status !== "running")) return;
       } catch {
         /* keep polling */
       }
-    }, 1000);
+      if (!stopped) timer = window.setTimeout(tick, 1000);
+    };
+    timer = window.setTimeout(tick, 500);
     return () => {
       stopped = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
-  }, [batch]);
+  }, [batchId]);
 
   const start = async () => {
     setBusy(true);

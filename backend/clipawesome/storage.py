@@ -6,6 +6,9 @@ import logging
 import shutil
 import threading
 import time
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,6 +36,23 @@ CATEGORIES = (
 )
 INTERVAL_SEC = 3600
 
+_in_use: set[str] = set()
+_in_use_lock = threading.Lock()
+
+
+@contextmanager
+def temp_dir() -> Iterator[Path]:
+    """A fresh folder under data/tmp that cleanup leaves alone while the block runs, removed afterwards."""
+    path = data_path("tmp", uuid.uuid4().hex)
+    with _in_use_lock:
+        _in_use.add(path.name)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+        with _in_use_lock:
+            _in_use.discard(path.name)
+
 
 def _size(path: Path) -> tuple[int, int]:
     total = count = 0
@@ -48,12 +68,17 @@ def _size(path: Path) -> tuple[int, int]:
 
 
 def _remove(path: Path) -> int:
-    size = _size(path)[0] if path.is_dir() else (path.stat().st_size if path.exists() else 0)
-    if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
-    else:
-        path.unlink(missing_ok=True)
-    return size
+    """Bytes actually freed; files still open elsewhere (a browser streaming them on Windows) are skipped."""
+    before = _size(path)[0] if path.is_dir() else (path.stat().st_size if path.exists() else 0)
+    try:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    after = _size(path)[0] if path.is_dir() else (path.stat().st_size if path.exists() else 0)
+    return before - after
 
 
 class Storage:
@@ -101,8 +126,11 @@ class Storage:
                         if self._editor.delete(task.id):
                             freed["exports"] += size
                 for mp3 in data_path("previews").glob("*.mp3"):
-                    if everything or mp3.stat().st_mtime < cutoff:
-                        freed["audio_previews"] += _remove(mp3)
+                    try:
+                        if everything or mp3.stat().st_mtime < cutoff:
+                            freed["audio_previews"] += _remove(mp3)
+                    except OSError:
+                        pass
 
             busy = self._previews.busy()
             copies = sorted(
@@ -126,7 +154,11 @@ class Storage:
     def _clean_temp(self, older_than_sec: int) -> int:
         freed = 0
         now = time.time()
+        with _in_use_lock:
+            busy = set(_in_use)
         for entry in data_path("tmp").glob("*"):
+            if entry.name in busy:
+                continue
             try:
                 if now - entry.stat().st_mtime >= older_than_sec:
                     freed += _remove(entry)

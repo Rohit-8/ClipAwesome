@@ -84,11 +84,9 @@ class ClipExporter:
     def _youtube_download(self, video_id: str, quality: int) -> DownloadTask | None:
         """The smallest finished (else running) video download of this video at `quality` or better."""
         tasks = [t for t in self.downloads.list() if t.video_id == video_id and t.option_id.startswith("v") and _height(t) >= quality]
-        for status in (("done",), ("queued", "downloading", "merging")):
-            match = sorted((t for t in tasks if t.status in status), key=_height)
-            if match:
-                return match[0]
-        return None
+        done = sorted((t for t in tasks if t.status == "done" and self.downloads.file_path(t.id)), key=_height)
+        active = sorted((t for t in tasks if t.status in ("queued", "downloading", "merging")), key=_height)
+        return (done or active or [None])[0]
 
     def ensure_source(self, analysis: Analysis, source_id: str, quality: int = 720) -> dict[str, Any]:
         """`{"status": "ready", "source": EditSource}` or `{"status": "downloading", "download": DownloadTask}`."""
@@ -107,7 +105,9 @@ class ClipExporter:
             if not videos:
                 raise SourceError("No downloadable video format was found for this video.")
             fitting = [o for o in videos if (o.height or 0) <= quality]
-            task = self.downloads.start(info, (fitting or videos)[-1 if fitting else 0])
+            choice = fitting[-1] if fitting else videos[0]
+            # The video may top out below `quality` (e.g. 480p); a download at its best is then the one to reuse.
+            task = self._youtube_download(video_id, choice.height or 0) or self.downloads.start(info, choice)
         if task.status != "done":
             return {"status": "downloading", "download": task}
         path = self.downloads.file_path(task.id)

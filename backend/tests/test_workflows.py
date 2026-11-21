@@ -1,4 +1,5 @@
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -7,10 +8,13 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from clipawesome import clipexport as ce
+from clipawesome import editor as ed
 from clipawesome import gpu
+from clipawesome import storage as st
 from clipawesome.api import app as app_module
 from clipawesome.api.app import app
-from clipawesome.downloads import ffmpeg_path
+from clipawesome.downloads import DownloadInfo, DownloadOption, DownloadTask, ffmpeg_path
 from clipawesome.jobs import JobManager
 from clipawesome.models import Analysis, ClipSuggestion, SourceVideo, TranscriptLine
 from clipawesome.sources.local_media import probe
@@ -157,8 +161,13 @@ def test_storage_system_and_diagnostics_endpoints():
         tmp_junk = app_module.cfg.data_path("tmp", "leftover")
         tmp_junk.mkdir(parents=True, exist_ok=True)
         (tmp_junk / "x.bin").write_bytes(b"0" * 2048)
-        cleaned = client.post("/api/storage/cleanup").json()
-        assert cleaned["freed"]["temp"] >= 2048 and not tmp_junk.exists()
+        with st.temp_dir() as in_use:
+            in_use.mkdir(parents=True)
+            (in_use / "audio.m4a").write_bytes(b"0" * 1024)
+            cleaned = client.post("/api/storage/cleanup").json()
+            assert cleaned["freed"]["temp"] >= 2048 and not tmp_junk.exists()
+            assert (in_use / "audio.m4a").exists(), "a running analysis' audio must survive cleanup"
+        assert not in_use.exists()
 
         info = client.get("/api/system").json()
         assert info["cpus"] >= 1 and set(info["profiles"]) == {"low", "balanced", "high"} and info["active"]["name"] in info["profiles"]
@@ -166,5 +175,68 @@ def test_storage_system_and_diagnostics_endpoints():
 
         diag = client.get("/api/diagnostics").json()
         keys = {c["key"] for c in diag["checks"]}
-        assert {"ffmpeg", "whisper", "ytdlp", "youtube", "disk", "machine", "data"} <= keys
+        assert {"ffmpeg", "captions", "whisper", "ytdlp", "youtube", "disk", "machine", "data"} <= keys
         assert all(c["status"] in ("ok", "warn", "fail", "info") for c in diag["checks"])
+        assert app_module.cfg.DATA_DIR.is_absolute()
+
+
+class FakeDownloads:
+    def __init__(self, tasks: list[DownloadTask], files: dict[str, Path]):
+        self.tasks, self.files, self.started = tasks, files, []
+
+    def list(self):
+        return self.tasks
+
+    def file_path(self, task_id):
+        return self.files.get(task_id)
+
+    def start(self, info, option):
+        self.started.append(option.id)
+        return DownloadTask(id="d_new", video_id=info.video_id, title=info.title, option_id=option.id, label=option.label, ext="mp4", created_at="2026-01-01T00:00:00+00:00")
+
+
+class FakeEditor:
+    def source_for_download(self, download_id, path, name):
+        return {"download": download_id}
+
+
+def test_edit_source_reuses_the_best_download_when_the_video_tops_out_lower(tmp_path, monkeypatch):
+    vid = "aqz-KE-bpKQ"
+    file = tmp_path / "v.mp4"
+    file.write_bytes(b"x")
+    done = lambda i, h: DownloadTask(id=i, video_id=vid, title="t", option_id=f"v{h}", label=f"{h}p", ext="mp4", status="done", created_at="2026-01-01T00:00:00+00:00")  # noqa: E731
+    # d_gone's file was deleted; d_480 is the best this video offers.
+    downloads = FakeDownloads([done("d_gone", 1080), done("d_480", 480)], {"d_480": file})
+    opts = {f"v{h}": DownloadOption(id=f"v{h}", kind="video", label=f"{h}p", quality=f"{h}p", height=h, ext="mp4", codec="h264") for h in (360, 480)}
+    info = DownloadInfo(video_id=vid, url="u", title="t", duration=600, ffmpeg=True, options=list(opts.values()))
+    monkeypatch.setattr(ce, "get_formats", lambda video_id: (info, opts))
+    analysis = Analysis(
+        id=new_analysis_id(), kind="youtube", mode="deterministic", preset="standard", min_len=30, max_len=90, created_at="2026-01-01T00:00:00+00:00", title="t",
+        sources=[SourceVideo(id="s1", platform="youtube", video_id=vid, title="t", duration=600)],
+    )
+    exporter = ce.ClipExporter(app_module.store, downloads, FakeEditor())  # type: ignore[arg-type]
+    assert exporter.ensure_source(analysis, "s1", 720) == {"status": "ready", "source": {"download": "d_480"}}
+    assert downloads.started == []
+
+
+@needs_ffmpeg
+def test_cancel_while_transcribing_for_captions_skips_the_encode(blue, tmp_path, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+
+    def slow_transcribe(path, **kwargs):
+        started.set()
+        release.wait(10)
+        return [(0.6, 1.0, "hello")], "en"
+
+    monkeypatch.setattr(ed.transcribe, "transcribe", slow_transcribe)
+    monkeypatch.setattr(ed.transcribe, "available", lambda: True)
+    manager = ed.EditorManager(tmp_path / "editor")
+    src = manager.add_source("s_000000000001", blue, "blue.mp4", "upload")
+    req = ed.ExportRequest(source_id=src.id, start=0.5, end=2.5, captions=ed.CaptionOptions(style="bold"))
+    task = manager.start(req, whisper={"model_size": "tiny"})
+    assert started.wait(10)
+    assert manager.cancel(task.id).status == "running"
+    release.set()
+    finished = wait(lambda: manager.export(task.id), lambda t: t.status not in ("queued", "running"))
+    assert finished.status == "cancelled"
+    assert not (tmp_path / "editor" / "exports" / task.id / "ffmpeg.log").exists(), "FFmpeg should not have run"

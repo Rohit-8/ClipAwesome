@@ -27,6 +27,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Fonts for burned-in captions (libass finds them via fontconfig): DejaVu for Latin scripts, Lohit for Devanagari (Hindi).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fontconfig fonts-dejavu-core fonts-lohit-deva \
+ && rm -rf /var/lib/apt/lists/*
+
 # JavaScript runtime yt-dlp uses to solve YouTube's player challenges.
 COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
 

@@ -10,7 +10,8 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = Path(os.environ.get("CLIPAWESOME_DATA") or ROOT / "data")
+# Absolute, because FFmpeg runs inside each export's folder and relative input paths would break.
+DATA_DIR = Path(os.environ.get("CLIPAWESOME_DATA") or ROOT / "data").expanduser().resolve()
 WEB_DIST = Path(os.environ.get("CLIPAWESOME_WEB_DIST") or ROOT / "web" / "dist")
 HOST = os.environ.get("CLIPAWESOME_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CLIPAWESOME_PORT", "8765"))
@@ -126,7 +127,7 @@ def _merge_secret(incoming: Any, current: str) -> str:
 
 
 def _split_auth(url: str) -> tuple[str, str, str, str] | None:
-    """(scheme+'://', user, password, host[:port]...) for a proxy URL with credentials."""
+    """(scheme, user, password, host[:port]) for a proxy URL with credentials."""
     parts = urlsplit(url)
     if "@" not in parts.netloc:
         return None
@@ -139,7 +140,7 @@ def mask_proxy(url: str) -> str:
     auth = _split_auth(url)
     if not auth or not auth[2]:
         return url
-    scheme, user, _, host = auth
+    _, user, _, host = auth
     parts = urlsplit(url)
     return urlunsplit(parts._replace(netloc=f"{user}:{MASK}@{host}"))
 

@@ -33,7 +33,7 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | GET | `/system` | `{cpus, ram_gb, available_ram_gb, recommended, setting, active: Profile, profiles: {low, balanced, high}}`. `Profile` = `{name, heavy_slots, threads, whisper_model, visual_analysis, x264_preset, chunk_sec, focused_over_sec}` (`null` = use the user's setting; `focused_over_sec: 0` = always focused, `null` = never). |
 | GET | `/storage` | `{categories: [{key, label, bytes, files, auto_cleanup}], total_bytes, disk_free_bytes, disk_total_bytes, cleanup_days, cache_limit_gb, data_dir}` |
 | POST | `/storage/cleanup` | `{freed: {category: bytes}, freed_bytes, usage}` — removes temporary files, finished exports, audio preview copies and YouTube playback copies now. Downloads and editor sources are never removed. |
-| GET | `/diagnostics` | `{ok, checks: [{key, label, status: ok\|info\|warn\|fail, detail, hint}]}` — FFmpeg, GPU encoder, Whisper, yt-dlp, JS runtime, YouTube reachability, AI provider, disk space, machine/profile, data folder. |
+| GET | `/diagnostics` | `{ok, checks: [{key, label, status: ok\|info\|warn\|fail, detail, hint}]}` — FFmpeg, GPU encoder, captions (libass + fonts test render), Whisper, yt-dlp, JS runtime, YouTube reachability, AI provider, disk space, machine/profile, data folder. |
 
 ### Analysis jobs
 
@@ -45,7 +45,7 @@ Base URL: `http://127.0.0.1:8765/api`. All bodies are JSON unless noted. Long-ru
 | POST | `/discover` | `{topic, search_limit=15, analyze_top=3, min_duration=180, max_duration=7200, creative_commons=false, ...AnalyzeOptions}` | |
 | GET | `/jobs/{job_id}` | — | `Job` |
 | GET | `/jobs` | — | Recent jobs |
-| POST | `/jobs/{job_id}/retry` | — | `202 Job` — a new job with the same request. `409` while the original is still active, or when it can't be re-run (e.g. an upload whose file is gone). |
+| POST | `/jobs/{job_id}/retry` | — | `202 Job` — a new job with the same request. `409` while the original is still active or when it has no saved request, `410` when its uploaded file is gone. |
 
 `Job`:
 

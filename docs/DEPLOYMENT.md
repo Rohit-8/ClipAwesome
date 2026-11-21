@@ -105,4 +105,6 @@ The default caps are `mem_limit 3g` and `cpus 2`, so a long transcription can't 
 
 - **YouTube blocks many datacenter IPs** with "Sign in to confirm you're not a bot". If YouTube analysis fails on the VM but works locally, set a residential or HTTP proxy under **Settings → Network** and use **Check YouTube** to verify. Local uploads are unaffected.
 - The first transcription downloads the Whisper model (141 MB for `base`) into the volume.
+- **Performance profile:** *Auto* reads the container limits, so with `cpus 2` and `mem_limit 3g` it picks **Low** (Whisper `tiny`, no scene-cut detection, focused transcription). To use the Whisper model chosen in Settings, either raise the limits or set **Settings → Performance** to *Balanced*.
+- **Captions** need fonts. The image installs DejaVu (Latin scripts) and Lohit Devanagari (Hindi). For other scripts (Arabic, CJK, Tamil…) add the matching `fonts-noto-*` package to the Dockerfile. **Settings → Diagnose → Captions** does a test render and says what is missing.
 - The image is built on the VM. The first build pulls the base images and takes a few minutes. Later builds reuse the dependency layer unless `backend/pyproject.toml` changes.

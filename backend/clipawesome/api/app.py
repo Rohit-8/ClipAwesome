@@ -215,6 +215,16 @@ def _check(checks: list[dict[str, Any]], key: str, label: str, status: str, deta
     checks.append({"key": key, "label": label, "status": status, "detail": detail, "hint": hint})
 
 
+def _model_cached(model: str) -> bool:
+    try:  # names like "turbo" map to repos with other names
+        from faster_whisper.utils import _MODELS
+
+        repo = _MODELS.get(model, model)
+    except ImportError:
+        repo = model
+    return cfg.data_path("models", "models--" + repo.replace("/", "--")).is_dir()
+
+
 @app.get("/api/diagnostics")
 def diagnostics() -> dict[str, Any]:
     """One-click self-test of everything the app depends on, with a fix hint for each problem."""
@@ -238,10 +248,14 @@ def diagnostics() -> dict[str, Any]:
         else:
             _check(checks, "gpu", "GPU encoding", "info", "No usable GPU encoder, so exports use the CPU (x264).")
 
+    if ffmpeg:
+        problem = ed.caption_problem(ffmpeg, refresh=True)
+        _check(checks, "captions", "Captions", "warn" if problem else "ok", problem or "FFmpeg can burn captions into exports.",
+               "Install fonts or an FFmpeg with libass, then restart" if problem else None)
+
     model = prof.whisper_model or s.whisper_model
     if transcribe.available():
-        cached = any(cfg.data_path("models").glob(f"models--*whisper-{model}"))
-        if cached:
+        if _model_cached(model):
             _check(checks, "whisper", "Speech-to-text", "ok", f"faster-whisper ready with the '{model}' model.")
         else:
             _check(checks, "whisper", "Speech-to-text", "warn", f"The '{model}' model isn't downloaded yet; it downloads on first use (needs internet).")

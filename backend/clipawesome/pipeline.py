@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import contextlib
 import math
-import shutil
 import time
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import focus, system
+from . import focus, storage, system
 from . import text as tx
 from .ai.llm import LLMClient, LLMError
 from .ai.rerank import expand_topic, rate_videos, rerank_clips
-from .config import Settings, data_path
+from .config import Settings
 from .engine.presets import LengthSpec, fit_to_duration, resolve_preset
 from .engine.scoring import EngineClip, score_source
 from .engine.signals import SourceSignals
@@ -242,19 +240,17 @@ def youtube_source(video_id: str, sid: str, plan: Plan, settings: Settings, prog
     audio_db = None
     need_audio = settings.youtube_audio == "always" or (settings.youtube_audio == "when_needed" and transcript is None)
     if need_audio:
-        tmp = data_path("tmp", uuid.uuid4().hex)
-        try:
-            system.require_space(tmp, int(duration * 24_000), "the audio used for analysis", SourceError)
-            progress("Downloading audio for analysis", 0.4)
-            path = youtube.download_audio(video_id, tmp, lambda f: progress("Downloading audio for analysis", 0.4 + 0.15 * f))
-            audio_db, whisper_transcript = audio_signals(
-                path, duration, settings, plan, _scaled(progress, 0.56, 0.9), warnings, transcript is None, heatmap, marks
-            )
-            transcript = transcript or whisper_transcript
-        except Exception as err:
-            warnings.append(f"Audio analysis skipped: {err}")
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        with storage.temp_dir() as tmp:
+            try:
+                system.require_space(tmp, int(duration * 24_000), "the audio used for analysis", SourceError)
+                progress("Downloading audio for analysis", 0.4)
+                path = youtube.download_audio(video_id, tmp, lambda f: progress("Downloading audio for analysis", 0.4 + 0.15 * f))
+                audio_db, whisper_transcript = audio_signals(
+                    path, duration, settings, plan, _scaled(progress, 0.56, 0.9), warnings, transcript is None, heatmap, marks
+                )
+                transcript = transcript or whisper_transcript
+            except Exception as err:
+                warnings.append(f"Audio analysis skipped: {err}")
 
     source = SourceVideo(
         id=sid,

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import uuid
 from collections.abc import Callable
@@ -492,6 +493,34 @@ def _ttl_hours() -> float:
         return 0.0
 
 
+_caption_checks: dict[str, str | None] = {}
+
+
+def caption_problem(ffmpeg: str, refresh: bool = False) -> str | None:
+    """Why this FFmpeg can't burn in captions (no libass, no fonts), or None when a test render works. Cached."""
+    if not refresh and ffmpeg in _caption_checks:
+        return _caption_checks[ffmpeg]
+    problem: str | None = None
+    with tempfile.TemporaryDirectory(prefix="ca_caption_check_") as work:
+        Path(work, CAPTIONS_FILE).write_text(cap.ass([(0.0, 1.0, "Test")], 320, 180, "classic"), encoding="utf-8")
+        cmd = [ffmpeg, "-hide_banner", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=320x180:d=0.2",
+               "-vf", f"subtitles={CAPTIONS_FILE}", "-frames:v", "1", "-f", "null", "-"]
+        try:
+            done = subprocess.run(cmd, cwd=work, capture_output=True, text=True, errors="replace", timeout=60,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            err = done.stderr
+            if "No such filter" in err:
+                problem = "This server's FFmpeg can't draw captions (it was built without libass). Turn captions off, or set IMAGEIO_FFMPEG_EXE to an FFmpeg with libass."
+            elif "failed to find any fallback" in err or "no usable fontconfig" in err.lower():
+                problem = "No fonts are installed on this server, so captions can't be drawn. Install some (e.g. apt install fontconfig fonts-dejavu-core) and restart."
+            elif done.returncode != 0:
+                problem = "FFmpeg couldn't draw a test caption: " + (err.strip().splitlines() or ["unknown error"])[-1]
+        except (OSError, subprocess.SubprocessError) as exc:
+            problem = f"FFmpeg couldn't draw a test caption ({type(exc).__name__})."
+    _caption_checks[ffmpeg] = problem
+    return problem
+
+
 def _rotation(path: Path) -> int:
     """Display rotation (0/90/180/270): phones often store portrait video sideways plus a rotation flag."""
     try:
@@ -716,6 +745,8 @@ class EditorManager:
         end = min(req.end, src.duration)
         if req.captions and caption_lines is None and (whisper is None or not transcribe.available()):
             raise EditError("Captions need a transcript: open this clip from an analysis, or install the 'transcribe' extra (faster-whisper).")
+        if req.captions and (problem := caption_problem(ffmpeg)):
+            raise EditError(problem)
         system.require_space(self.root, _space_needed(src, end - req.start, req.format), "this export", EditError)
         name = output_name(src.name, req, Path(src.path).suffix)
         task = ExportTask(
@@ -909,6 +940,8 @@ class EditorManager:
                     raise InterruptedError
                 self._update(task_id, persist=True, status="running", progress=0.0, stage=None, encoder=_encoder_label(encodes, enc))
                 captions_file = prepare() if prepare else None
+                if task_id in self._cancel:  # cancelled while Whisper transcribed the clip
+                    raise InterruptedError
                 code = self._exec(task_id, build(enc.codec if enc else None, captions_file), total, log_path)
                 if code != 0 and enc is not None and task_id not in self._cancel:
                     log.warning("Export %s: %s encode failed, retrying on the CPU", task_id, enc.name)

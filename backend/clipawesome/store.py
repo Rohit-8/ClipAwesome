@@ -58,22 +58,30 @@ class Store:
         if not _ANALYSIS_ID.match(analysis_id):
             return None
         path = self.analyses / f"{analysis_id}.json"
-        if not path.exists():
-            return None
-        return Analysis.model_validate_json(path.read_text(encoding="utf-8"))
+        # Under the lock: a review saved at the same moment would otherwise be read half-written.
+        with self._lock:
+            if not path.exists():
+                return None
+            raw = path.read_text(encoding="utf-8")
+        return Analysis.model_validate_json(raw)
 
     def list(self) -> list[AnalysisSummary]:
         items = [AnalysisSummary.model_validate(e) for e in read_json(self.index_path, [])]
         return sorted(items, key=lambda s: s.created_at, reverse=True)
 
     def set_review(self, analysis_id: str, clip_id: str, review: str | None) -> Analysis | None:
+        if not _ANALYSIS_ID.match(analysis_id):
+            return None
+        path = self.analyses / f"{analysis_id}.json"
         with self._lock:
-            analysis = self.get(analysis_id)
-            clip = next((c for c in analysis.clips if c.id == clip_id), None) if analysis else None
-            if analysis is None or clip is None:
+            if not path.exists():
+                return None
+            analysis = Analysis.model_validate_json(path.read_text(encoding="utf-8"))
+            clip = next((c for c in analysis.clips if c.id == clip_id), None)
+            if clip is None:
                 return None
             clip.review = review  # type: ignore[assignment]
-            (self.analyses / f"{analysis.id}.json").write_text(analysis.model_dump_json(), encoding="utf-8")
+            path.write_text(analysis.model_dump_json(), encoding="utf-8")
             return analysis
 
     def delete(self, analysis_id: str) -> bool:
