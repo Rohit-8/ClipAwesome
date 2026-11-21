@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import shutil
 import time
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import focus, system
 from . import text as tx
 from .ai.llm import LLMClient, LLMError
 from .ai.rerank import expand_topic, rate_videos, rerank_clips
@@ -45,6 +47,7 @@ class Plan:
     include_comments: bool
     keywords: list[str] = field(default_factory=list)
     llm: LLMClient | None = None
+    profile: system.Profile = field(default_factory=system.active)
 
 
 @dataclass
@@ -62,6 +65,7 @@ def _scaled(progress: Progress, lo: float, hi: float) -> Progress:
 
 def make_plan(opts: AnalyzeOptions, settings: Settings, warnings: list[str]) -> Plan:
     youtube.configure_proxy(settings.proxy)
+    profile = system.configure(settings.performance)
     mode = opts.mode or settings.default_mode
     llm = None
     if mode == "ai":
@@ -78,6 +82,7 @@ def make_plan(opts: AnalyzeOptions, settings: Settings, warnings: list[str]) -> 
         query=query,
         include_comments=settings.include_comments if opts.include_comments is None else opts.include_comments,
         llm=llm,
+        profile=profile,
     )
 
 
@@ -122,17 +127,63 @@ def run_engine(source: SourceVideo, sig: SourceSignals, plan: Plan, settings: Se
     return SourceResult(source, clips, res.timeline, res.transcript_lines, spec)
 
 
-def _whisper(path: Path, settings: Settings, duration: float, progress: Progress) -> Transcript:
-    items, lang = transcribe.transcribe(
-        path,
-        model_size=settings.whisper_model,
-        device=settings.whisper_device,
-        compute_type=settings.whisper_compute_type,
-        duration=duration,
-        progress=lambda f: progress("Transcribing speech (Whisper)", f),
-    )
+def _focused(settings: Settings, profile: system.Profile, duration: float) -> bool:
+    if settings.focused_transcription != "auto":
+        return settings.focused_transcription == "on"
+    return profile.focused_over_sec is not None and duration > profile.focused_over_sec
+
+
+def _minutes(sec: float) -> str:
+    return f"{sec / 60:.0f} min" if sec >= 90 else f"{sec:.0f} s"
+
+
+def audio_signals(
+    path: Path,
+    duration: float,
+    settings: Settings,
+    plan: Plan,
+    progress: Progress,
+    warnings: list[str],
+    want_transcript: bool,
+    heatmap: list[tuple[float, float, float]] | None = None,
+    marks: list[tuple[float, float, str]] | None = None,
+) -> tuple[object | None, Transcript | None]:
+    """Audio energy (always) and a Whisper transcript (when wanted), decoding the audio as few times as possible."""
+    if want_transcript and not transcribe.available():
+        warnings.append("Install the 'transcribe' extra (faster-whisper) to transcribe videos without captions")
+        want_transcript = False
+    if not want_transcript:
+        return local_media.loudness(path, duration=duration, progress=lambda f: progress("Measuring audio energy", f)), None
+
+    prof = plan.profile
+    model = prof.whisper_model or settings.whisper_model
+    if model != settings.whisper_model:
+        warnings.append(f"Low performance profile: transcribed with the '{model}' Whisper model instead of '{settings.whisper_model}' (much faster, a little less accurate).")
+    whisper = dict(model_size=model, device=settings.whisper_device, compute_type=settings.whisper_compute_type, threads=prof.threads, workers=prof.heavy_slots, chunk_sec=prof.chunk_sec)
+
+    def waiting() -> None:
+        progress("Waiting for another transcription or export to finish…", 0.0)
+
+    if _focused(settings, prof, duration):
+        audio_db = local_media.loudness(path, duration=duration, progress=lambda f: progress("Measuring audio energy", 0.2 * f))
+        windows = focus.pick_windows(duration, plan.spec.max_len, audio_db, 0.5, heatmap, marks)
+        done = focus.covered(windows)
+        if done < duration * 0.99:
+            warnings.append(
+                f"Focused transcription: transcribed {_minutes(done)} of {_minutes(duration)}, the parts with the most replays, comments and audio energy. "
+                "Moments outside them have no transcript, so topic matching and speech signals don't see them. Turn it off in Settings → Performance for a full transcript."
+            )
+        with system.heavy.slot(waiting):
+            items, lang = transcribe.transcribe(
+                path, duration=duration, windows=windows, progress=lambda f: progress("Transcribing the likely moments (Whisper)", 0.2 + 0.8 * f), **whisper
+            )
+    else:
+        with system.heavy.slot(waiting):
+            audio_db, items, lang = transcribe.scan_and_transcribe(
+                path, duration=duration, progress=lambda f: progress("Transcribing speech (Whisper)", f), **whisper
+            )
     words, events = from_timed_words(items)
-    return make_transcript(words, events, "whisper", lang)
+    return audio_db, make_transcript(words, events, "whisper", lang)
 
 
 def youtube_source(video_id: str, sid: str, plan: Plan, settings: Settings, progress: Progress, warnings: list[str]) -> tuple[SourceVideo, SourceSignals]:
@@ -193,15 +244,13 @@ def youtube_source(video_id: str, sid: str, plan: Plan, settings: Settings, prog
     if need_audio:
         tmp = data_path("tmp", uuid.uuid4().hex)
         try:
+            system.require_space(tmp, int(duration * 24_000), "the audio used for analysis", SourceError)
             progress("Downloading audio for analysis", 0.4)
             path = youtube.download_audio(video_id, tmp, lambda f: progress("Downloading audio for analysis", 0.4 + 0.15 * f))
-            progress("Measuring audio energy", 0.56)
-            audio_db = local_media.loudness(path, duration=duration, progress=lambda f: progress("Measuring audio energy", 0.56 + 0.1 * f))
-            if transcript is None:
-                if transcribe.available():
-                    transcript = _whisper(path, settings, duration, _scaled(progress, 0.66, 0.9))
-                else:
-                    warnings.append("Install the 'transcribe' extra (faster-whisper) to transcribe videos without captions")
+            audio_db, whisper_transcript = audio_signals(
+                path, duration, settings, plan, _scaled(progress, 0.56, 0.9), warnings, transcript is None, heatmap, marks
+            )
+            transcript = transcript or whisper_transcript
         except Exception as err:
             warnings.append(f"Audio analysis skipped: {err}")
         finally:
@@ -321,32 +370,33 @@ def analyze_local(
         except Exception as err:
             warnings.append(f"Subtitle file could not be parsed: {err}")
 
+    want_transcript = transcript is None and info.has_audio
+    if want_transcript and not transcribe.available():
+        warnings.append("No transcript: add a subtitle file or install the 'transcribe' extra (faster-whisper)")
+        want_transcript = False
+
     audio_db = None
     if info.has_audio:
-        progress("Measuring audio energy", 0.05)
-        audio_db = local_media.loudness(path, duration=info.duration, progress=lambda f: progress("Measuring audio energy", 0.05 + 0.15 * f))
+        try:
+            audio_db, whisper_transcript = audio_signals(path, info.duration, settings, plan, _scaled(progress, 0.05, 0.85), warnings, want_transcript)
+            transcript = transcript or whisper_transcript
+        except Exception as err:
+            warnings.append(f"Transcription failed: {err}")
+            audio_db = local_media.loudness(path, duration=info.duration)
     else:
         warnings.append("No audio track: speech and energy signals are unavailable")
 
     cuts: list[float] | None = None
-    if info.has_video and settings.visual_analysis != "off":
-        progress("Detecting scene cuts", 0.2)
+    visual = plan.profile.visual_analysis or settings.visual_analysis
+    if info.has_video and visual != settings.visual_analysis:
+        warnings.append("Low performance profile: scene-cut detection was skipped to save time (the visual-activity signal is unavailable).")
+    if info.has_video and visual != "off":
+        progress("Detecting scene cuts", 0.85)
         try:
-            cuts = local_media.scene_cuts(
-                path, settings.visual_analysis, info.duration, lambda f: progress("Detecting scene cuts", 0.2 + 0.15 * f)
-            )
+            with system.heavy.slot() if visual == "full" else contextlib.nullcontext():
+                cuts = local_media.scene_cuts(path, visual, info.duration, lambda f: progress("Detecting scene cuts", 0.85 + 0.07 * f))
         except Exception as err:
             warnings.append(f"Scene detection skipped: {err}")
-
-    if transcript is None and info.has_audio:
-        if transcribe.available():
-            progress("Transcribing speech (Whisper)", 0.35)
-            try:
-                transcript = _whisper(path, settings, info.duration, _scaled(progress, 0.35, 0.9))
-            except Exception as err:
-                warnings.append(f"Transcription failed: {err}")
-        else:
-            warnings.append("No transcript: add a subtitle file or install the 'transcribe' extra (faster-whisper)")
 
     source = SourceVideo(
         id="s1",

@@ -78,6 +78,9 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 | F6.4 | Transcript panel | Searchable, highlights clip ranges and current sentence, click to seek. |
 | F6.5 | Multi-source | Discovery results switch the player to the clip's source video. |
 | F6.6 | Export | JSON, CSV, Markdown (with timestamped YouTube links), copy-to-clipboard. |
+| F6.7 | Review mode | Approve / reject clips with buttons or keys (J/K move and play, A approve, X reject, U undo); filter All / To review / Approved / Rejected. Decisions are saved on the analysis. |
+| F6.8 | Edit & export a clip | Opens the clip in the Editor with its start, end and title filled in. YouTube sources are downloaded once at a chosen quality (an existing download at that quality or better is reused); local files open at once. |
+| F6.9 | Batch export | Approved / top N / all-not-rejected clips → one MP4 each, centre-cropped to 9:16, 1:1 or original, optional burned-in captions and −14 LUFS loudness. Live per-clip progress and “Save all”. Files are named `NN title [start to end].mp4`. |
 
 ## F7 — Settings
 
@@ -86,8 +89,12 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 | F7.1 | AI provider config | Provider (custom / gemini / groq / nvidia), base URL, model (with model list from the endpoint), API key (write-only, masked on read), AI weight, temperature, timeout. |
 | F7.2 | Analysis defaults | Default mode, preset, max clips, comment mining, visual analysis level. |
 | F7.3 | Transcription | Whisper model size, device, compute type, YouTube audio fallback policy. |
-| F7.4 | YouTube & network | Optional Data API key, preferred caption languages, outbound **proxy** (http/https/socks5) for restricted networks, and a "Check YouTube connection" button. |
+| F7.4 | YouTube & network | Optional Data API key, preferred caption languages, outbound **proxy** (http/https/socks5) for restricted networks, and a "Check YouTube connection" button. The proxy password is masked when read back and kept when the masked value is saved. |
 | F7.5 | Scoring weights | Sliders for every signal weight; reset to defaults. |
+| F7.6 | Performance profile | Auto (detected from CPU threads and RAM: ≤ 4 threads or < 7.5 GB → Low; ≥ 12 threads and ≥ 15.5 GB → High; else Balanced) or a fixed Low / Balanced / High. The card lists exactly what the profile changes and its effect on quality: Whisper model (Low forces `tiny`), focused transcription, scene-cut detection (Low turns it off), heavy tasks at once, CPU threads, x264 preset (bigger files, same look, on faster presets) and audio chunk size. |
+| F7.7 | Focused transcription | Auto (follows the profile: Low = always, Balanced = videos > 30 min, High = never) / Always / Never. When on, only the most replayed, commented and loud stretches (≥ 30% of the video, ≥ 10 min) are transcribed; each analysis warns how much was covered. |
+| F7.8 | Storage | Usage per category, auto-cleanup age (default 14 days) for finished exports, audio previews and temp files, a size cap for YouTube playback copies (default 5 GB), and “Clean up now”. Downloads and opened files are never removed automatically. |
+| F7.9 | Diagnose | One-click check of FFmpeg, GPU encoder, Whisper, yt-dlp age, JS runtime, YouTube reachability, AI provider, disk, machine and data folder, with a fix for every problem. |
 
 ## F8 — History
 
@@ -121,12 +128,18 @@ Scope rule: ClipAwesome **suggests** clip ranges. It does not render, cut, or pu
 | F11.7 | Exports | One export at a time (CPU-friendly); live progress, speed and ETA; cancel; auto-save when done; files expire with `CLIPAWESOME_DOWNLOAD_TTL_HOURS`. |
 | F11.9 | Merge | Join 2–20 clips (uploads or downloads), each with its own start/end, reordered by drag or arrows. Frame = first clip's displayed shape (phone rotation respected) or 16:9 / 9:16 / 1:1, at an optional resolution; other shapes get black bars or fill & crop. Audio-only clips become black video, silent clips get silence so the soundtrack stays continuous. MP3 merge too. Fast merge (stream copy) when every clip shares one format, otherwise a clear reason. |
 | F11.10 | GPU acceleration | Settings toggle (on by default). Finds a working NVIDIA NVENC / Intel Quick Sync / AMD AMF H.264 encoder with a 15-frame test encode, uses it for MP4 exports and merges (quality matched to x264 CRF 18/23/28), and redoes the export on the CPU if the GPU encode fails. Each export shows the encoder it used. Off = always CPU. |
+| F11.11 | Captions | Off / Bold / Classic / Boxed, bottom or middle, burned into MP4 exports a few words at a time (ASS subtitles via libass; portrait frames keep captions above the app UI). Words come from the analysis transcript when the clip was opened from Results, otherwise Whisper transcribes the range. |
+| F11.12 | Even out the volume | EBU R128 loudness normalisation to −14 LUFS (true peak −1.5 dB) for exports and merges. Disables fast cut/merge. |
+| F11.13 | File name | Optional title for the exported file; clips opened from Results use the clip title. |
 
 ## F9 — Platform
 
 | ID | Feature | Acceptance criteria |
 |---|---|---|
-| F9.1 | Background jobs | Long work runs off the request thread; UI polls job status with stage + progress. |
+| F9.1 | Background jobs | Long work runs off the request thread; UI polls job status with stage + progress. Jobs are saved to disk; a job cut off by a restart shows as “Interrupted” with **Run again**, and failed jobs can be re-run too. |
+| F9.5 | Light on memory | Audio is decoded once and streamed in chunks (5–10 min) for loudness and transcription together, so long videos don't load into RAM. One Whisper model is cached at a time. |
+| F9.6 | Heavy-work queue | Transcriptions and exports share a limiter (1 at a time, 2 on High); extra work waits with a “Waiting…” stage instead of slowing everything down. |
+| F9.7 | Disk checks | Downloads, audio fetches, previews, exports and merges check free space first (keeping 500 MB spare) and fail with a clear message instead of a half-written file. |
 | F9.2 | Capabilities | `/api/health` reports what is available (Whisper, AI configured, JS runtime for yt-dlp) and the UI checks YouTube reachability, so it can warn before a job fails. |
 | F9.3 | Local-only by default | API binds to `127.0.0.1`; strict CORS; secrets never returned to the browser. |
 | F9.4 | Single-process mode | Backend serves the built UI. |

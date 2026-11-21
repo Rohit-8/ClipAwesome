@@ -3,6 +3,7 @@ import {
   ArrowUpDown,
   AudioWaveform,
   BadgeCheck,
+  Captions,
   CircleX,
   Clock,
   CloudUpload,
@@ -32,13 +33,14 @@ import { Thumb } from "../components/Thumb";
 import { TimeInput } from "../components/TimeInput";
 import { useToast } from "../components/Toast";
 import { TrimBar } from "../components/TrimBar";
-import { Badge, Button, Card, Chip, Field, IconButton, Notice, ProgressBar, Segmented, Select, Toggle, ToolSection } from "../components/ui";
+import { Badge, Button, Card, Chip, Field, IconButton, Input, Notice, ProgressBar, Segmented, Select, Toggle, ToolSection } from "../components/ui";
 import { api } from "../lib/api";
+import { useApp } from "../lib/app-context";
 import { browserDecodes, useCompatAudio } from "../lib/compat-audio";
 import { cx, fmtBytes, fmtDuration, relativeTime } from "../lib/format";
 import { navigate, useRoute } from "../lib/router";
 import { formatLength } from "../lib/time";
-import type { CropBox, DownloadTask, EditSource, ExportFormat, ExportTask } from "../lib/types";
+import type { CaptionStyle, CropBox, DownloadTask, EditSource, ExportFormat, ExportTask } from "../lib/types";
 
 const MEDIA_ACCEPT = ".mp4,.mkv,.mov,.webm,.avi,.m4v,.wmv,.flv,.mpg,.mpeg,.ts,.mp3,.wav,.m4a,.flac,.ogg,.opus,.aac";
 const ACTIVE = new Set(["queued", "running"]);
@@ -231,17 +233,35 @@ function SourcePicker() {
 
 // ------------------------------------------------------------------ workspace
 
-function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task: ExportTask) => void }) {
+/** A clip handed over from the Results page: its range, title and the analysis whose transcript feeds captions. */
+interface ClipPreset {
+  start: number;
+  end: number;
+  title: string;
+  analysis: string | null;
+  asrc: string | null;
+}
+
+function Workspace({ source, preset, onStarted }: { source: EditSource; preset: ClipPreset | null; onStarted: (task: ExportTask) => void }) {
   const toast = useToast();
   const gpu = useGpuStatus();
+  const { health } = useApp();
   const video = useRef<HTMLVideoElement>(null);
   const [dims, setDims] = useState({ w: source.width || 1920, h: source.height || 1080 });
   const [duration, setDuration] = useState(source.duration);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [loopSel, setLoopSel] = useState(false);
+  const [loopSel, setLoopSel] = useState(!!preset);
   const [mediaError, setMediaError] = useState(false);
-  const [range, setRange] = useState({ start: 0, end: source.duration });
+  const [range, setRange] = useState(() => {
+    if (!preset) return { start: 0, end: source.duration };
+    const end = Math.min(source.duration, Math.max(preset.end, 0.1));
+    return { start: Math.max(0, Math.min(preset.start, end - 0.1)), end };
+  });
+  const [title, setTitle] = useState(preset?.title ?? "");
+  const [captions, setCaptions] = useState<"off" | CaptionStyle>("off");
+  const [captionPos, setCaptionPos] = useState<"bottom" | "center">("bottom");
+  const [normalize, setNormalize] = useState(false);
   const [aspect, setAspect] = useState("off");
   const [crop, setCrop] = useState<CropBox>(() => fitCrop(null, 16 / 9));
   const [rotate, setRotate] = useState<0 | 90 | 180 | 270>(0);
@@ -272,7 +292,11 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
   const visual = source.has_video && format !== "mp3";
   const cropOn = visual && aspect !== "off";
   const transforms = visual && (cropOn || rotate !== 0 || flipH || flipV || height !== null);
-  const useFast = fast && format === "mp4" && !transforms;
+  const captionsOn = format === "mp4" && source.has_video && captions !== "off";
+  const canNormalize = format !== "gif" && source.has_audio && !(format === "mp4" && mute);
+  const normalizeOn = canNormalize && normalize;
+  const useFast = fast && format === "mp4" && !transforms && !captionsOn && !normalizeOn;
+  const captionsNeedWhisper = !preset?.analysis && health?.capabilities.whisper === false;
   const selLength = range.end - range.start;
 
   // Smooth playhead while playing; loop the selection when asked.
@@ -366,6 +390,11 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
         format,
         quality,
         fast: useFast,
+        normalize: normalizeOn,
+        captions: captionsOn
+          ? { style: captions as CaptionStyle, position: captionPos, analysis_id: preset?.analysis ?? null, analysis_source: preset?.asrc ?? null }
+          : null,
+        title: title.trim() || null,
       });
       onStarted(task);
       toast("Export started. It will save automatically when ready.", "info");
@@ -421,6 +450,10 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
                 const v = e.currentTarget;
                 if (v.videoWidth && v.videoHeight) setDims({ w: v.videoWidth, h: v.videoHeight });
                 if (Number.isFinite(v.duration) && v.duration > 0) setDuration(v.duration);
+                if (preset && v.currentTime === 0) {
+                  v.currentTime = range.start;
+                  setTime(range.start);
+                }
               }}
               onPlay={() => setPlaying(true)}
               onPause={() => {
@@ -618,13 +651,70 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
           </ToolSection>
         )}
 
+        {format === "mp4" && source.has_video && (
+          <ToolSection
+            title="Captions"
+            hint={
+              captions === "off"
+                ? "Burn the spoken words into the video, a few words at a time, like Shorts and Reels."
+                : preset?.analysis
+                  ? "Words come from this clip’s analysis transcript. If it has no transcript here, the clip is transcribed with Whisper first."
+                  : "The clip is transcribed with Whisper on this server first, which adds some time before the export starts."
+            }
+          >
+            <div className="space-y-2.5">
+              <Segmented
+                full
+                size="sm"
+                value={captions}
+                onChange={(v) => {
+                  setCaptions(v);
+                  if (v !== "off") setFast(false);
+                }}
+                options={[
+                  { value: "off", label: "Off" },
+                  { value: "bold", label: "Bold", icon: <Captions className="size-3.5" /> },
+                  { value: "classic", label: "Classic" },
+                  { value: "boxed", label: "Boxed" },
+                ]}
+              />
+              {captions !== "off" && (
+                <Segmented
+                  full
+                  size="sm"
+                  value={captionPos}
+                  onChange={setCaptionPos}
+                  options={[
+                    { value: "bottom", label: "Bottom" },
+                    { value: "center", label: "Middle" },
+                  ]}
+                />
+              )}
+              {captions !== "off" && captionsNeedWhisper && (
+                <Notice tone="warn">Whisper is not installed, so captions only work for clips opened from an analysis that has a transcript.</Notice>
+              )}
+            </div>
+          </ToolSection>
+        )}
+
         {format === "mp4" && (
           <ToolSection title="Options">
             <div className="space-y-4">
               {source.has_audio && <Toggle checked={mute} onChange={setMute} label="Remove audio" />}
+              {canNormalize && (
+                <Toggle
+                  checked={normalizeOn}
+                  onChange={(v) => {
+                    setNormalize(v);
+                    if (v) setFast(false);
+                  }}
+                  label="Even out the volume"
+                  description="Sets loudness to −14 LUFS, the level YouTube, TikTok and Instagram play at, so quiet clips are not drowned out. Re-encodes the audio."
+                />
+              )}
               <Toggle
                 checked={useFast}
-                disabled={transforms}
+                disabled={transforms || captionsOn || normalizeOn}
                 onChange={setFast}
                 label={
                   <span className="inline-flex items-center gap-1.5">
@@ -632,14 +722,29 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
                   </span>
                 }
                 description={
-                  transforms
-                    ? "Only for plain trims, so turn crop, rotate and resize off first."
+                  transforms || captionsOn || normalizeOn
+                    ? "Only for plain trims, so turn crop, rotate, resize, captions and volume levelling off first."
                     : "No re-encoding: instant and keeps the original quality. Cuts snap to the nearest keyframe."
                 }
               />
             </div>
           </ToolSection>
         )}
+
+        {format === "mp3" && canNormalize && (
+          <ToolSection title="Options">
+            <Toggle
+              checked={normalizeOn}
+              onChange={setNormalize}
+              label="Even out the volume"
+              description="Sets loudness to −14 LUFS, the level streaming apps play at."
+            />
+          </ToolSection>
+        )}
+
+        <ToolSection title="File name" hint="Optional. Leave empty to name it after the source and the time range.">
+          <Input value={title} maxLength={120} placeholder={source.name.replace(/\.[^.]+$/, "")} onChange={(e) => setTitle(e.target.value)} />
+        </ToolSection>
 
         {format === "mp4" && !useFast && (
           <ToolSection title="Quality">
@@ -680,6 +785,14 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
               <span className="truncate font-medium text-fg">{encoderText(gpu)}</span>
             </div>
           )}
+          {(captionsOn || normalizeOn) && (
+            <div className="flex justify-between gap-3">
+              <span className="text-fg-3">Extras</span>
+              <span className="truncate font-medium text-fg">
+                {[captionsOn ? `${captions} captions` : null, normalizeOn ? "−14 LUFS" : null].filter(Boolean).join(" · ")}
+              </span>
+            </div>
+          )}
         </div>
         {gifTooLong && <Notice tone="neg">GIFs are limited to 60 seconds. Shorten the selection.</Notice>}
 
@@ -696,7 +809,8 @@ function Workspace({ source, onStarted }: { source: EditSource; onStarted: (task
 function ExportRow({ task, onCancel, onDelete }: { task: ExportTask; onCancel: () => void; onDelete: () => void }) {
   const active = ACTIVE.has(task.status);
   let detail: string;
-  if (task.status === "queued") detail = "Waiting for the previous export to finish…";
+  if (task.status === "queued") detail = task.stage || "Waiting for the previous export to finish…";
+  else if (task.status === "running" && task.stage) detail = task.stage;
   else if (task.status === "running")
     detail = [
       `${Math.round(task.progress * 100)}%`,
@@ -775,6 +889,17 @@ export function EditorPage() {
   const sourceId = params.get("source");
   const downloadId = params.get("download");
   const merging = params.get("mode") === "merge";
+  const startParam = params.get("start");
+  const endParam = params.get("end");
+  const titleParam = params.get("title");
+  const analysisParam = params.get("analysis");
+  const asrcParam = params.get("asrc");
+  const preset = useMemo<ClipPreset | null>(() => {
+    const start = Number(startParam);
+    const end = Number(endParam);
+    if (startParam == null || endParam == null || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { start, end, title: titleParam ?? "", analysis: analysisParam, asrc: asrcParam };
+  }, [startParam, endParam, titleParam, analysisParam, asrcParam]);
   const toast = useToast();
   const [source, setSource] = useState<EditSource | null>(null);
   const [opening, setOpening] = useState(false);
@@ -900,7 +1025,7 @@ export function EditorPage() {
       ) : opening && !source ? (
         <Card className="h-[420px] animate-pulse bg-white/[0.02]" />
       ) : source && source.id === sourceId ? (
-        <Workspace key={source.id} source={source} onStarted={started} />
+        <Workspace key={`${source.id}:${startParam ?? ""}:${endParam ?? ""}`} source={source} preset={preset} onStarted={started} />
       ) : (
         <SourcePicker />
       )}

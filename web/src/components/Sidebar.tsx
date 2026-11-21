@@ -56,6 +56,7 @@ export function Sidebar({ active, collapsed }: { active: string; collapsed: bool
   const caps = health?.capabilities;
   const ai = caps?.ai_configured ? `${caps.ai_provider} · ${caps.ai_model}` : "Not configured";
   const yt = youtube === null ? "Checking…" : youtube.ok ? "Reachable" : "Blocked — set a proxy";
+  const perf = caps?.performance ? `${caps.performance[0].toUpperCase()}${caps.performance.slice(1)}${caps.performance_auto ? " (auto)" : ""}` : "…";
   return (
     <aside
       className={cx(
@@ -89,7 +90,7 @@ export function Sidebar({ active, collapsed }: { active: string; collapsed: bool
       {collapsed ? (
         <a
           href="#/settings"
-          title={`Engine status\nAI mode: ${ai}\nLocal transcription: ${caps?.whisper ? "ready" : "not installed"}\nYouTube: ${yt}`}
+          title={`Engine status\nAI mode: ${ai}\nLocal transcription: ${caps?.whisper ? "ready" : "not installed"}\nYouTube: ${yt}\nPerformance: ${perf}`}
           className="mt-auto flex flex-col items-center gap-2.5 rounded-xl border border-white/[0.06] bg-black/20 py-3"
         >
           <StatusDot ok={!!caps?.ai_configured} />
@@ -105,6 +106,17 @@ export function Sidebar({ active, collapsed }: { active: string; collapsed: bool
             detail={caps?.ai_configured ? ai : <a href="#/settings" className="text-accent-soft hover:underline">Configure provider</a>}
           />
           <StatusRow ok={!!caps?.whisper} label="Local transcription" detail={caps?.whisper ? "faster-whisper ready" : "Not installed"} />
+          <StatusRow
+            ok={!!caps?.performance && caps.performance !== "low"}
+            warn={caps?.performance === "low"}
+            label="Performance"
+            detail={
+              <a href="#/settings" className="hover:text-fg" title="Change in Settings → Performance">
+                {perf}
+                {caps?.performance === "low" ? " · lighter, less accurate" : ""}
+              </a>
+            }
+          />
           <StatusRow
             ok={!!youtube?.ok}
             warn={youtube !== null && !youtube.ok}

@@ -1,5 +1,6 @@
-import { ArrowLeft, CircleCheck, FileVideo, LoaderCircle, Settings, Telescope, TriangleAlert } from "lucide-react";
+import { ArrowLeft, CircleCheck, FileVideo, LoaderCircle, RotateCw, Settings, Telescope, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useToast } from "../components/Toast";
 import { Button, Card, Notice, ProgressBar, YouTubeMark } from "../components/ui";
 import { api } from "../lib/api";
 import { cx } from "../lib/format";
@@ -12,8 +13,10 @@ function elapsed(fromIso: string, toIso: string) {
 }
 
 export function JobView({ id }: { id: string }) {
+  const toast = useToast();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     let stop = false;
@@ -27,7 +30,7 @@ export function JobView({ id }: { id: string }) {
           timer = window.setTimeout(() => navigate(`analysis/${j.result_id}`, true), 450);
           return;
         }
-        if (j.status === "error") return;
+        if (j.status === "error" || j.status === "interrupted") return;
       } catch (e) {
         if (!stop) setError((e as Error).message);
         return;
@@ -49,9 +52,22 @@ export function JobView({ id }: { id: string }) {
     ) : (
       <FileVideo className="size-6 text-fg" />
     );
-  const failed = job?.status === "error" || !!error;
-  const networkIssue = (job?.error ?? "").toLowerCase().includes("proxy");
+  const interrupted = job?.status === "interrupted";
+  const failed = job?.status === "error" || interrupted || !!error;
+  const networkIssue = (job?.error ?? "").toLowerCase().includes("proxy") || (job?.error ?? "").toLowerCase().includes("bot");
   const stages = (job?.stages ?? []).filter((s) => s.name !== "Queued" && s.name !== "Starting");
+
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      const { job_id } = await api.retryJob(id);
+      navigate(`job/${job_id}`, true);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <div className="mx-auto flex min-h-[80vh] max-w-xl flex-col justify-center px-5 py-12">
@@ -60,7 +76,7 @@ export function JobView({ id }: { id: string }) {
           <div className="flex size-14 items-center justify-center rounded-2xl bg-white/[0.05] ring-1 ring-white/[0.08]">{icon}</div>
           <div className="min-w-0">
             <div className="text-[12px] uppercase tracking-wider text-fg-3">
-              {failed ? "Analysis failed" : job?.status === "done" ? "Complete" : "Analysing"}
+              {interrupted ? "Analysis interrupted" : failed ? "Analysis failed" : job?.status === "done" ? "Complete" : "Analysing"}
             </div>
             <div className="truncate text-[17px] font-semibold text-fg">{job?.title || "Preparing…"}</div>
           </div>
@@ -89,7 +105,7 @@ export function JobView({ id }: { id: string }) {
                     <span className="flex size-4 items-center justify-center">
                       <span className="size-2 animate-pulse rounded-full bg-violet" />
                     </span>
-                  ) : s.name === "Failed" ? (
+                  ) : s.name === "Failed" || s.name === "Interrupted" ? (
                     <TriangleAlert className="size-4 text-neg" />
                   ) : (
                     <CircleCheck className="size-4 text-pos/80" />
@@ -104,10 +120,15 @@ export function JobView({ id }: { id: string }) {
 
         {failed && (
           <div className="mt-6 space-y-4">
-            <Notice tone="neg" icon={<TriangleAlert className="size-4" />}>
+            <Notice tone={interrupted ? "warn" : "neg"} icon={<TriangleAlert className="size-4" />}>
               {job?.error || error}
             </Notice>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {job?.retryable && (
+                <Button variant="primary" icon={<RotateCw className="size-4" />} loading={retrying} onClick={retry}>
+                  Run again
+                </Button>
+              )}
               <Button icon={<ArrowLeft className="size-4" />} onClick={() => navigate("")}>
                 Back to Studio
               </Button>

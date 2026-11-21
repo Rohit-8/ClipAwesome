@@ -16,6 +16,12 @@ import type {
   MergeRequest,
   PreviewStatus,
   Settings,
+  BatchOptions,
+  DiagnosticCheck,
+  EditSourceResult,
+  ExportBatch,
+  StorageUsage,
+  SystemInfo,
 } from "./types";
 
 export class ApiError extends Error {
@@ -107,6 +113,18 @@ export const api = {
     request<{ job_id: string }>("POST", "/analyze/local-path", { path, subtitle_path, ...opts }),
   discover: (req: DiscoverRequest) => request<{ job_id: string }>("POST", "/discover", req),
   job: (id: string) => request<Job>("GET", `/jobs/${encodeURIComponent(id)}`),
+  retryJob: (id: string) => request<{ job_id: string }>("POST", `/jobs/${encodeURIComponent(id)}/retry`),
+  systemInfo: () => request<SystemInfo>("GET", "/system"),
+  storage: () => request<StorageUsage>("GET", "/storage"),
+  cleanupStorage: () => request<{ freed_bytes: number; usage: StorageUsage }>("POST", "/storage/cleanup"),
+  diagnostics: () => request<{ ok: boolean; checks: DiagnosticCheck[] }>("GET", "/diagnostics"),
+  reviewClip: (analysisId: string, clipId: string, review: "approved" | "rejected" | null) =>
+    request<{ id: string; review: string | null }>("PATCH", `/analyses/${encodeURIComponent(analysisId)}/clips/${encodeURIComponent(clipId)}`, { review }),
+  editSource: (analysisId: string, sourceId: string, quality: number) =>
+    request<EditSourceResult>("POST", `/analyses/${encodeURIComponent(analysisId)}/sources/${encodeURIComponent(sourceId)}/edit-source`, { quality }),
+  exportClips: (analysisId: string, opts: BatchOptions) => request<ExportBatch>("POST", `/analyses/${encodeURIComponent(analysisId)}/export`, opts),
+  exportBatch: (id: string) => request<ExportBatch>("GET", `/export-batches/${encodeURIComponent(id)}`),
+  download: (id: string) => request<DownloadTask>("GET", `/downloads/${encodeURIComponent(id)}`),
   analyses: () => request<AnalysisSummary[]>("GET", "/analyses"),
   analysis: (id: string) => request<Analysis>("GET", `/analyses/${encodeURIComponent(id)}`),
   deleteAnalysis: (id: string) => request<void>("DELETE", `/analyses/${encodeURIComponent(id)}`),

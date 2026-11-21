@@ -16,6 +16,7 @@ from typing import Any, Literal
 import yt_dlp
 from pydantic import BaseModel, Field
 
+from . import system
 from .config import data_path, read_json, write_json
 from .sources import youtube
 from .sources.youtube import SourceError
@@ -370,6 +371,8 @@ class DownloadManager:
     def start(self, info: DownloadInfo, option: DownloadOption) -> DownloadTask:
         if not option.available:
             raise SourceError(option.reason or "This format is not available.")
+        # Unknown sizes: assume ~4 Mbit/s, a typical 1080p stream.
+        system.require_space(self.root, int((option.size or info.duration * 500_000) * 1.1), "this download", SourceError)
         task = DownloadTask(
             id="d_" + uuid.uuid4().hex[:12],
             video_id=info.video_id,

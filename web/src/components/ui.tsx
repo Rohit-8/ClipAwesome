@@ -1,6 +1,6 @@
-import { ChevronDown, LoaderCircle } from "lucide-react";
+import { ChevronDown, LoaderCircle, X } from "lucide-react";
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
-import { useId } from "react";
+import { useEffect, useId } from "react";
 import { cx } from "../lib/format";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
@@ -218,6 +218,35 @@ export function ToolSection({ title, hint, children }: { title: string; hint?: R
         {hint && <div className="mt-0.5 text-[12px] text-fg-3">{hint}</div>}
       </div>
       {children}
+    </div>
+  );
+}
+
+export function Modal({ title, subtitle, onClose, children, wide }: { title: ReactNode; subtitle?: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-[8vh] backdrop-blur-sm" onMouseDown={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        className={cx("glass-strong w-full animate-fade-up rounded-2xl p-6 shadow-2xl shadow-black/60", wide ? "max-w-2xl" : "max-w-md")}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-[16px] font-semibold tracking-tight text-fg">{title}</h3>
+            {subtitle && <p className="mt-1 text-[13px] leading-relaxed text-fg-3">{subtitle}</p>}
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X className="size-4" />
+          </IconButton>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }

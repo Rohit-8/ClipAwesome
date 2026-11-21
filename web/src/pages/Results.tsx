@@ -10,6 +10,8 @@ import {
   FileSpreadsheet,
   FileText,
   ListOrdered,
+  ListChecks,
+  PackageCheck,
   Search,
   Sparkles,
   TriangleAlert,
@@ -17,13 +19,14 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClipCard } from "../components/ClipCard";
+import { ExportClipsDialog, OpenInEditorDialog } from "../components/ClipExport";
 import type { PlayerHandle } from "../components/Player";
 import { Player } from "../components/Player";
 import { Thumb } from "../components/Thumb";
 import { Timeline } from "../components/Timeline";
 import { useToast } from "../components/Toast";
 import { TranscriptPanel } from "../components/TranscriptPanel";
-import { Badge, Button, Card, EmptyState, SectionTitle, Segmented } from "../components/ui";
+import { Badge, Button, Card, Chip, EmptyState, SectionTitle, Segmented } from "../components/ui";
 import { api } from "../lib/api";
 import { download, slug, toCSV, toJSON, toMarkdown } from "../lib/exporters";
 import { cx, fmtCount, fmtDuration, relativeTime } from "../lib/format";
@@ -147,6 +150,7 @@ function OtherMatches({ a, items }: { a: Analysis; items: SearchResult[] }) {
 }
 
 export function Results({ id }: { id: string }) {
+  const toast = useToast();
   const [a, setA] = useState<Analysis | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceId, setSourceId] = useState("");
@@ -154,6 +158,10 @@ export function Results({ id }: { id: string }) {
   const [time, setTime] = useState(0);
   const [sort, setSort] = useState<"score" | "time">("score");
   const [showWarnings, setShowWarnings] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const [editing, setEditing] = useState<Clip | null>(null);
+  const [exporting, setExporting] = useState(false);
   const player = useRef<PlayerHandle>(null);
   const pendingPlay = useRef<Clip | null>(null);
 
@@ -180,8 +188,18 @@ export function Results({ id }: { id: string }) {
   const sourceClips = useMemo(() => (a ? a.clips.filter((c) => c.source_id === sourceId) : []), [a, sourceId]);
   const listClips = useMemo(() => {
     if (!a) return [];
-    return sort === "score" ? a.clips : [...a.clips].sort((x, y) => x.source_id.localeCompare(y.source_id) || x.start - y.start);
-  }, [a, sort]);
+    const sorted = sort === "score" ? a.clips : [...a.clips].sort((x, y) => x.source_id.localeCompare(y.source_id) || x.start - y.start);
+    if (filter === "all") return sorted;
+    return sorted.filter((c) => (filter === "pending" ? !c.review : c.review === filter));
+  }, [a, sort, filter]);
+  const counts = useMemo(() => {
+    const clips = a?.clips ?? [];
+    return {
+      approved: clips.filter((c) => c.review === "approved").length,
+      rejected: clips.filter((c) => c.review === "rejected").length,
+      pending: clips.filter((c) => !c.review).length,
+    };
+  }, [a]);
 
   const playClip = useCallback(
     (c: Clip) => {
@@ -199,6 +217,40 @@ export function Results({ id }: { id: string }) {
     player.current?.seek(t);
     setTime(t);
   }, []);
+
+  const review = useCallback(
+    async (clip: Clip, value: "approved" | "rejected" | null) => {
+      setA((prev) => (prev ? { ...prev, clips: prev.clips.map((c) => (c.id === clip.id ? { ...c, review: value } : c)) } : prev));
+      try {
+        await api.reviewClip(id, clip.id, value);
+      } catch (e) {
+        setA((prev) => (prev ? { ...prev, clips: prev.clips.map((c) => (c.id === clip.id ? { ...c, review: clip.review } : c)) } : prev));
+        toast((e as Error).message, "error");
+      }
+    },
+    [id, toast],
+  );
+
+  // Review shortcuts: A approve, X reject, U undo, J/K or arrows move to the next/previous clip and play it.
+  useEffect(() => {
+    if (!reviewing) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.ctrlKey || e.metaKey || e.altKey || !listClips.length) return;
+      const idx = Math.max(0, listClips.findIndex((c) => c.id === activeClip));
+      const cur = listClips[idx];
+      const key = e.key.toLowerCase();
+      if (key === "a") void review(cur, "approved");
+      else if (key === "x") void review(cur, "rejected");
+      else if (key === "u") void review(cur, null);
+      else if (key === "j" || e.key === "ArrowDown") playClip(listClips[Math.min(listClips.length - 1, activeClip ? idx + 1 : 0)]);
+      else if (key === "k" || e.key === "ArrowUp") playClip(listClips[Math.max(0, idx - 1)]);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [reviewing, listClips, activeClip, review, playClip]);
 
   if (error) {
     return (
@@ -364,7 +416,7 @@ export function Results({ id }: { id: string }) {
 
         <aside className="min-w-0">
           <div className="space-y-4 xl:sticky xl:top-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="text-[15px] font-semibold text-fg">{a.clips.length} clip suggestions</h2>
                 <p className="text-[12px] text-fg-3">{multi ? "Ranked across all analysed videos" : "Best first"}</p>
@@ -379,6 +431,37 @@ export function Results({ id }: { id: string }) {
                 ]}
               />
             </div>
+            {a.clips.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip active={reviewing} icon={<ListChecks className="size-3.5" />} onClick={() => setReviewing((v) => !v)}>
+                  Review
+                </Chip>
+                <Button size="sm" variant="primary" icon={<PackageCheck className="size-3.5" />} onClick={() => setExporting(true)}>
+                  Export clips{counts.approved ? ` (${counts.approved} approved)` : ""}
+                </Button>
+              </div>
+            )}
+            {reviewing && (
+              <div className="space-y-2 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+                <Segmented
+                  size="sm"
+                  full
+                  value={filter}
+                  onChange={setFilter}
+                  options={[
+                    { value: "all", label: "All" },
+                    { value: "pending", label: `To review ${counts.pending}` },
+                    { value: "approved", label: `✓ ${counts.approved}` },
+                    { value: "rejected", label: `✗ ${counts.rejected}` },
+                  ]}
+                />
+                <p className="text-[11.5px] text-fg-3">
+                  Keys: <kbd className="rounded bg-white/[0.08] px-1">J</kbd>/<kbd className="rounded bg-white/[0.08] px-1">K</kbd> next/previous and play,{" "}
+                  <kbd className="rounded bg-white/[0.08] px-1">A</kbd> approve, <kbd className="rounded bg-white/[0.08] px-1">X</kbd> reject,{" "}
+                  <kbd className="rounded bg-white/[0.08] px-1">U</kbd> undo. Decisions are saved with the analysis.
+                </p>
+              </div>
+            )}
             {a.clips.length === 0 ? (
               <Card>
                 <EmptyState
@@ -389,6 +472,7 @@ export function Results({ id }: { id: string }) {
               </Card>
             ) : (
               <div className="space-y-3 xl:max-h-[calc(100vh-186px)] xl:overflow-y-auto xl:pr-1">
+                {listClips.length === 0 && <p className="rounded-xl border border-dashed border-white/[0.1] p-6 text-center text-[13px] text-fg-3">No clips in this view.</p>}
                 {listClips.map((c) => (
                   <ClipCard
                     key={c.id}
@@ -396,7 +480,10 @@ export function Results({ id }: { id: string }) {
                     source={a.sources.find((s) => s.id === c.source_id)}
                     active={c.id === activeClip}
                     showSource={multi}
+                    reviewing={reviewing}
                     onPlay={() => playClip(c)}
+                    onEdit={() => setEditing(c)}
+                    onReview={(v) => void review(c, v)}
                   />
                 ))}
                 {a.other_results.length > 0 && <OtherMatches a={a} items={a.other_results} />}
@@ -405,6 +492,10 @@ export function Results({ id }: { id: string }) {
           </div>
         </aside>
       </div>
+      {editing && (
+        <OpenInEditorDialog analysis={a} clip={editing} source={a.sources.find((s) => s.id === editing.source_id) ?? source} onClose={() => setEditing(null)} />
+      )}
+      {exporting && <ExportClipsDialog analysis={a} onClose={() => setExporting(false)} />}
     </div>
   );
 }

@@ -3,7 +3,9 @@ import {
   CircleCheck,
   CircleX,
   Cpu,
+  Gauge,
   Globe,
+  HardDrive,
   KeyRound,
   ListRestart,
   Mic,
@@ -13,12 +15,14 @@ import {
   Server,
   SlidersHorizontal,
   Sparkles,
+  Stethoscope,
   Wifi,
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useToast } from "../components/Toast";
+import { DiagnoseCard, PerformanceCard, StorageCard } from "../components/SystemPanels";
 import { Button, Card, Field, Input, Notice, SectionTitle, Segmented, Select, Slider, Toggle } from "../components/ui";
 import { api } from "../lib/api";
 import { useApp } from "../lib/app-context";
@@ -51,8 +55,11 @@ const SECTIONS = [
   { id: "ai", label: "AI provider", icon: <Bot className="size-4" /> },
   { id: "analysis", label: "Analysis defaults", icon: <SlidersHorizontal className="size-4" /> },
   { id: "transcription", label: "Transcription", icon: <Mic className="size-4" /> },
+  { id: "performance", label: "Performance", icon: <Gauge className="size-4" /> },
   { id: "network", label: "YouTube & network", icon: <Globe className="size-4" /> },
   { id: "gpu", label: "Editor & GPU", icon: <Cpu className="size-4" /> },
+  { id: "storage", label: "Storage", icon: <HardDrive className="size-4" /> },
+  { id: "diagnose", label: "Diagnose", icon: <Stethoscope className="size-4" /> },
   { id: "weights", label: "Scoring weights", icon: <ListRestart className="size-4" /> },
 ];
 
@@ -467,6 +474,8 @@ export function SettingsPage() {
             </div>
           </Card>
 
+          <PerformanceCard form={form} set={set} />
+
           <Card id="set-network" className="scroll-mt-6 p-6">
             <SectionTitle icon={<Globe className="size-4" />} title="YouTube & network" subtitle="Optional API key for official search, and a proxy for restricted networks." />
             <div className="mt-5 grid gap-5 md:grid-cols-2">
@@ -483,7 +492,7 @@ export function SettingsPage() {
                   onChange={(e) => set("youtube_api_key", e.target.value || saved.youtube_api_key)}
                 />
               </Field>
-              <Field label="Proxy" hint="Used for YouTube, SponsorBlock and search. http://, https:// or socks5://">
+              <Field label="Proxy" hint="Used for YouTube, SponsorBlock and search. http://, https:// or socks5://. A saved password shows as ••••; leave it as is to keep it.">
                 <Input value={form.proxy} onChange={(e) => set("proxy", e.target.value)} placeholder="http://proxy.company.com:8080" spellCheck={false} />
               </Field>
             </div>
@@ -521,6 +530,9 @@ export function SettingsPage() {
               )}
             </div>
           </Card>
+
+          <StorageCard form={form} set={set} />
+          <DiagnoseCard />
 
           <Card id="set-weights" className="scroll-mt-6 p-6">
             <SectionTitle

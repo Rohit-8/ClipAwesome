@@ -42,9 +42,10 @@ class Report:
     tried: list[dict[str, object]] = field(default_factory=list)
 
 
-def video_args(quality: str, codec: str | None = None) -> list[str]:
+def video_args(quality: str, codec: str | None = None, preset: str = "veryfast") -> list[str]:
+    """`preset` is x264's speed/size trade-off (from the performance profile); GPU encoders ignore it."""
     if codec is None:
-        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(CPU_CRF[quality]), "-pix_fmt", "yuv420p"]
+        return ["-c:v", "libx264", "-preset", preset, "-crf", str(CPU_CRF[quality]), "-pix_fmt", "yuv420p"]
     return _GPU_ARGS[codec](str(GPU_QUALITY[quality]))
 
 

@@ -77,6 +77,8 @@ def test_output_name_is_safe():
     assert ed.output_name("x.mkv", req(fast=True), ".mkv").endswith(".mkv")
     assert ed.merge_output_name(["a.mp4", "a.mp4"], "mp4") == "a (merged 2 parts).mp4"
     assert ed.merge_output_name(["a.mp4", "b.mov", "c.mkv"], "mp4") == "a + 2 more.mp4"
+    titled = req(start=604, end=635).model_copy(update={"title": '01 Moment · 10:04 v2.0 <"best">'})
+    assert ed.output_name("src.mp4", titled, ".mp4") == "01 Moment - 10-04 v2.0 best [10-04 to 10-35].mp4"
 
 
 def test_gpu_encoder_arguments():

@@ -18,9 +18,11 @@ from typing import Any, Literal
 import av
 from pydantic import BaseModel, Field, model_validator
 
-from . import gpu
+from . import captions as cap
+from . import gpu, system
 from .config import data_path, read_json, write_json
 from .downloads import ffmpeg_path, now_iso
+from .sources import transcribe
 from .sources.local_media import probe
 
 log = logging.getLogger("clipawesome.editor")
@@ -31,6 +33,9 @@ GIF_MAX_SEC = 60.0
 MAX_MERGE_CLIPS = 20
 FRAME_RATIOS = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0}
 FFMPEG_HEAD = ("-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1")
+# -14 LUFS integrated is what YouTube, Instagram, TikTok and Spotify normalise to, so clips play at a consistent level.
+LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
+CAPTIONS_FILE = "captions.ass"
 
 
 class EditError(ValueError):
@@ -54,6 +59,14 @@ class CropBox(BaseModel):
         return self
 
 
+class CaptionOptions(BaseModel):
+    style: Literal["bold", "classic", "boxed"] = "bold"
+    position: Literal["bottom", "center"] = "bottom"
+    # Use this analysis' transcript (same video, same timeline); otherwise the clip is transcribed with Whisper.
+    analysis_id: str | None = Field(None, max_length=40)
+    analysis_source: str | None = Field(None, max_length=40)
+
+
 class ExportRequest(BaseModel):
     source_id: str = Field(..., min_length=3, max_length=40)
     start: float = Field(0, ge=0)
@@ -67,6 +80,9 @@ class ExportRequest(BaseModel):
     format: Literal["mp4", "mp3", "gif"] = "mp4"
     quality: Literal["high", "balanced", "small"] = "balanced"
     fast: bool = False
+    normalize: bool = False
+    captions: CaptionOptions | None = None
+    title: str | None = Field(None, max_length=120)
 
     @model_validator(mode="after")
     def _check(self) -> ExportRequest:
@@ -84,8 +100,9 @@ class ExportRequest(BaseModel):
 class EditSource(BaseModel):
     id: str
     name: str
-    kind: Literal["upload", "download"]
+    kind: Literal["upload", "download", "analysis"]
     download_id: str | None = None
+    origin: str | None = None  # dedupe key for files opened from an analysis ("media:<id>")
     path: str = Field("", exclude=True)
     duration: float
     has_video: bool
@@ -120,6 +137,7 @@ class MergeRequest(BaseModel):
     format: Literal["mp4", "mp3"] = "mp4"
     quality: Literal["high", "balanced", "small"] = "balanced"
     fast: bool = False
+    normalize: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> MergeRequest:
@@ -137,6 +155,7 @@ class ExportTask(BaseModel):
     format: str
     encoder: str | None = None
     status: Literal["queued", "running", "done", "error", "cancelled"] = "queued"
+    stage: str | None = None
     progress: float = 0.0
     speed: float | None = None
     eta: float | None = None
@@ -161,13 +180,22 @@ def _safe_stem(name: str) -> str:
     return re.sub(r"[^\w\-. ()\[\]]+", "_", stem).strip(" ._") or "video"
 
 
+def _safe_title(title: str) -> str:
+    """A clip title as a file stem: `Moment · 10:04` → `Moment - 10-04` (no extension stripping)."""
+    t = re.sub(r"(\d):(\d)", r"\1-\2", title)
+    t = re.sub(r"\s*[·•|:/\\]+\s*", " - ", t)
+    t = re.sub(r"[^\w\-. ()\[\]]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip(" ._-") or "clip"
+
+
 def _even(n: float) -> int:
     return max(2, round(n / 2) * 2)
 
 
 def output_name(source_name: str, req: ExportRequest, source_ext: str) -> str:
     ext = source_ext.lstrip(".").lower() if req.fast else req.format
-    return f"{_safe_stem(source_name)[:80]} [{_fmt_t(req.start)} to {_fmt_t(req.end)}].{ext}"
+    stem = _safe_title(req.title) if req.title else _safe_stem(source_name)
+    return f"{stem[:80]} [{_fmt_t(req.start)} to {_fmt_t(req.end)}].{ext}"
 
 
 def describe(req: ExportRequest) -> str:
@@ -182,6 +210,10 @@ def describe(req: ExportRequest) -> str:
         parts.append(f"{req.height}p")
     if req.mute and req.format != "mp3":
         parts.append("no audio")
+    if req.captions:
+        parts.append("captions")
+    if req.normalize:
+        parts.append("−14 LUFS")
     return " · ".join(parts)
 
 
@@ -194,8 +226,24 @@ def validate(req: ExportRequest, src: EditSource) -> None:
         raise EditError("This file has no audio track.")
     if req.format == "gif" and min(req.end, src.duration) - req.start > GIF_MAX_SEC:
         raise EditError(f"GIFs are limited to {int(GIF_MAX_SEC)} seconds — trim the range first.")
-    if req.fast and (req.transforms or req.format != "mp4"):
-        raise EditError("Fast cut only trims. Turn it off to crop, rotate, resize or convert.")
+    if req.fast and (req.transforms or req.format != "mp4" or req.captions or req.normalize):
+        raise EditError("Fast cut only trims. Turn it off to crop, rotate, resize, add captions, even out the volume or convert.")
+    if req.captions and req.format != "mp4":
+        raise EditError("Captions can only be added to MP4 video exports.")
+    if req.normalize and (req.format == "gif" or req.mute or not src.has_audio):
+        raise EditError("Volume levelling needs an export that keeps the audio.")
+
+
+def output_size(src: EditSource, req: ExportRequest) -> tuple[int, int]:
+    """Pixel size of the exported video (mirrors the crop/rotate/scale filters)."""
+    w, h = display_size(src)
+    if req.crop:
+        w, h = 2 * int(w * req.crop.w / 2 + 0.01), 2 * int(h * req.crop.h / 2 + 0.01)
+    if req.rotate in (90, 270):
+        w, h = h, w
+    if req.height and h > req.height:
+        w, h = _even(w * req.height / h), req.height
+    return max(2, w), max(2, h)
 
 
 def _video_filters(req: ExportRequest) -> list[str]:
@@ -211,8 +259,20 @@ def _video_filters(req: ExportRequest) -> list[str]:
     return vf
 
 
-def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path, codec: str | None = None) -> list[str]:
-    """`codec` is a GPU H.264 encoder (see gpu.py); None encodes on the CPU with x264."""
+def build_command(
+    ffmpeg: str,
+    src: EditSource,
+    req: ExportRequest,
+    out: Path,
+    codec: str | None = None,
+    preset: str = "veryfast",
+    threads: int = 0,
+    captions_file: str | None = None,
+) -> list[str]:
+    """`codec` is a GPU H.264 encoder (see gpu.py); None encodes on the CPU with x264.
+
+    `captions_file` is relative to the working directory FFmpeg runs in (Windows drive colons break the filter syntax).
+    """
     end = min(req.end, src.duration)
     args = [ffmpeg, *FFMPEG_HEAD]
     args += ["-ss", f"{req.start:.3f}", "-i", src.path, "-t", f"{end - req.start:.3f}"]
@@ -222,8 +282,10 @@ def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path, c
         args += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
         return args + [str(out)]
 
+    # loudnorm upsamples to 192 kHz internally, so the output rate is set explicitly.
+    level = lambda rate: ["-af", LOUDNORM, "-ar", str(rate)] if req.normalize else []  # noqa: E731
     if req.format == "mp3":
-        return args + ["-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-q:a", "2", str(out)]
+        return args + ["-map", "0:a:0", "-vn", *level(44100), "-c:a", "libmp3lame", "-q:a", "2", str(out)]
 
     vf = _video_filters(req)
     if req.format == "gif":
@@ -233,11 +295,15 @@ def build_command(ffmpeg: str, src: EditSource, req: ExportRequest, out: Path, c
 
     if req.height:
         vf.append(f"scale=-2:'min({req.height},ih)'")
+    if captions_file:
+        vf.append(f"subtitles={captions_file}")
     args += ["-map", "0:v:0"] + ([] if req.mute or not src.has_audio else ["-map", "0:a:0"])
     if vf:
         args += ["-vf", ",".join(vf)]
-    args += [*gpu.video_args(req.quality, codec), "-movflags", "+faststart"]
-    args += ["-an"] if req.mute or not src.has_audio else ["-c:a", "aac", "-b:a", "160k"]
+    args += [*gpu.video_args(req.quality, codec, preset), "-movflags", "+faststart"]
+    if codec is None and threads:
+        args += ["-threads", str(threads)]
+    args += ["-an"] if req.mute or not src.has_audio else [*level(48000), "-c:a", "aac", "-b:a", "160k"]
     return args + [str(out)]
 
 
@@ -287,6 +353,8 @@ def validate_merge(req: MergeRequest, items: list[tuple[MergeClip, EditSource]],
         raise EditError("None of these clips has audio.")
     if not req.fast:
         return
+    if req.normalize:
+        raise EditError("Fast merge can't change the volume. Turn off Fast merge to level the audio.")
     if req.format != "mp4" or not all(s.has_video for _, s in items):
         raise EditError("Fast merge only joins video clips. Turn it off to re-encode.")
     sigs = [(signature(Path(s.path)), s.rotation) for _, s in items]
@@ -299,7 +367,15 @@ def validate_merge(req: MergeRequest, items: list[tuple[MergeClip, EditSource]],
             )
 
 
-def build_merge_command(ffmpeg: str, items: list[tuple[MergeClip, EditSource]], req: MergeRequest, out: Path, codec: str | None = None) -> list[str]:
+def build_merge_command(
+    ffmpeg: str,
+    items: list[tuple[MergeClip, EditSource]],
+    req: MergeRequest,
+    out: Path,
+    codec: str | None = None,
+    preset: str = "veryfast",
+    threads: int = 0,
+) -> list[str]:
     video = req.format == "mp4"
     audio = req.format == "mp3" or (not req.mute and any(s.has_audio for _, s in items))
     rate = 44100 if req.format == "mp3" else 48000
@@ -329,11 +405,16 @@ def build_merge_command(ffmpeg: str, items: list[tuple[MergeClip, EditSource]], 
             else:
                 graph.append(f"anullsrc=r={rate}:cl=stereo,atrim=duration={dur:.3f}[a{i}]")
             pads.append(f"[a{i}]")
-    outs = ("[v]" if video else "") + ("[a]" if audio else "")
+    level = audio and req.normalize
+    outs = ("[v]" if video else "") + (("[am]" if level else "[a]") if audio else "")
     graph.append(f"{''.join(pads)}concat=n={len(items)}:v={int(video)}:a={int(audio)}{outs}")
+    if level:
+        graph.append(f"[am]{LOUDNORM},aresample={rate}[a]")
     args += ["-filter_complex", ";".join(graph)]
     if video:
-        args += ["-map", "[v]", *gpu.video_args(req.quality, codec), "-movflags", "+faststart"]
+        args += ["-map", "[v]", *gpu.video_args(req.quality, codec, preset), "-movflags", "+faststart"]
+        if codec is None and threads:
+            args += ["-threads", str(threads)]
     if audio:
         args += ["-map", "[a]", *(["-c:a", "libmp3lame", "-q:a", "2"] if req.format == "mp3" else ["-c:a", "aac", "-b:a", "160k"])]
     return args + [str(out)]
@@ -364,6 +445,8 @@ def describe_merge(req: MergeRequest, canvas: tuple[int, int] | None) -> str:
         parts.append(f"{canvas[0]}×{canvas[1]}")
     if req.mute and req.format == "mp4":
         parts.append("no audio")
+    if req.normalize:
+        parts.append("−14 LUFS")
     return " · ".join(parts)
 
 
@@ -427,6 +510,14 @@ def _encoder_label(encodes: bool, enc: gpu.Encoder | None) -> str | None:
 
 def _uses(task: ExportTask, source_id: str) -> bool:
     return source_id in (task.source_ids or [task.source_id])
+
+
+def _space_needed(src: EditSource, seconds: float, fmt: str) -> int:
+    """Rough output size: the source's own bitrate for that stretch (re-encodes rarely exceed it), plus headroom."""
+    if fmt == "mp3":
+        return int(seconds * 24_000) + 5 * system.MB
+    share = src.size * min(1.0, seconds / src.duration) if src.duration else src.size
+    return int(share * 1.5) + 20 * system.MB
 
 
 class EditorManager:
@@ -544,6 +635,18 @@ class EditorManager:
             return existing
         return self.add_source("s_" + uuid.uuid4().hex[:12], path, name, "download", download_id)
 
+    def source_for_file(self, origin: str, path: Path, name: str) -> EditSource:
+        """Editor source for a file the app already has (an analysed upload, a YouTube playback copy), reused per origin."""
+        with self._lock:
+            self._load()
+            existing = next((s for s in self._sources.values() if s.origin == origin and Path(s.path) == path and path.is_file()), None)
+        if existing:
+            return existing
+        src = self.add_source("s_" + uuid.uuid4().hex[:12], path, name, "analysis")
+        src.origin = origin
+        self._save_source(src)
+        return src
+
     def sources(self) -> list[EditSource]:
         with self._lock:
             self._load()
@@ -595,7 +698,14 @@ class EditorManager:
             task = self._tasks.get(task_id)
             return task.model_copy() if task else None
 
-    def start(self, req: ExportRequest, use_gpu: bool = False) -> ExportTask:
+    def start(
+        self,
+        req: ExportRequest,
+        use_gpu: bool = False,
+        caption_lines: list[tuple[float, float, str]] | None = None,
+        whisper: dict[str, Any] | None = None,
+    ) -> ExportTask:
+        """`caption_lines` is the analysis transcript for captions; without it, `whisper` settings transcribe the clip."""
         src = self.source(req.source_id)
         if src is None:
             raise EditError("That video is no longer available — open it again.")
@@ -603,6 +713,10 @@ class EditorManager:
         ffmpeg = ffmpeg_path()
         if ffmpeg is None:
             raise EditError("FFmpeg is not available on this server.")
+        end = min(req.end, src.duration)
+        if req.captions and caption_lines is None and (whisper is None or not transcribe.available()):
+            raise EditError("Captions need a transcript: open this clip from an analysis, or install the 'transcribe' extra (faster-whisper).")
+        system.require_space(self.root, _space_needed(src, end - req.start, req.format), "this export", EditError)
         name = output_name(src.name, req, Path(src.path).suffix)
         task = ExportTask(
             id="e_" + uuid.uuid4().hex[:12],
@@ -613,10 +727,33 @@ class EditorManager:
             format=Path(name).suffix.lstrip("."),
             created_at=now_iso(),
         )
-        out = self._exp_dir(task.id) / name
-        total = max(0.1, min(req.end, src.duration) - req.start)
+        folder = self._exp_dir(task.id)
+        out = folder / name
+
+        def prepare() -> str | None:
+            if not req.captions:
+                return None
+            words = cap.words_from_lines(caption_lines, req.start, end) if caption_lines else []
+            # Focused transcription leaves gaps, so a clip outside the transcribed parts is transcribed now.
+            if not words and whisper is not None and transcribe.available():
+                self._update(task.id, stage="Transcribing the clip for captions…")
+                items, _ = transcribe.transcribe(Path(src.path), duration=src.duration, windows=[(req.start, end)], **whisper)
+                words = cap.clip_words(items, req.start, end)
+            if not words:
+                raise EditError("No speech was found in this clip, so there are no captions to add. Turn captions off and export again.")
+            w, h = output_size(src, req)
+            groups = cap.group(words, req.captions.style)
+            (folder / CAPTIONS_FILE).write_text(cap.ass(groups, w, h, req.captions.style, req.captions.position), encoding="utf-8")
+            self._update(task.id, stage=None)
+            return CAPTIONS_FILE
+
+        def build(codec: str | None, captions_file: str | None) -> list[str]:
+            prof = system.active()
+            return build_command(ffmpeg, src, req, out, codec, prof.x264_preset, prof.threads, captions_file)
+
+        total = max(0.1, end - req.start)
         encodes = req.format == "mp4" and not req.fast
-        return self._submit(task, ffmpeg, lambda codec: build_command(ffmpeg, src, req, out, codec), out, total, encodes, use_gpu)
+        return self._submit(task, ffmpeg, build, out, total, encodes, use_gpu, prepare)
 
     def start_merge(self, req: MergeRequest, use_gpu: bool = False) -> ExportTask:
         items: list[tuple[MergeClip, EditSource]] = []
@@ -645,19 +782,35 @@ class EditorManager:
         folder = self._exp_dir(task.id)
         out = folder / merge_output_name(names, ext)
         total = max(0.1, sum(min(c.end, s.duration) - c.start for c, s in items))
+        need = sum(_space_needed(s, min(c.end, s.duration) - c.start, req.format) for c, s in items)
+        system.require_space(self.root, need, "this merge", EditError)
         if req.fast:
             folder.mkdir(parents=True, exist_ok=True)
             listing = folder / "clips.ffconcat"
             listing.write_text(ffconcat(items), encoding="utf-8")
-            return self._submit(task, ffmpeg, lambda _codec: build_fast_merge_command(ffmpeg, listing, out, req.mute), out, total, False, False)
-        build = lambda codec: build_merge_command(ffmpeg, items, req, out, codec)  # noqa: E731
+            return self._submit(task, ffmpeg, lambda _codec, _cap: build_fast_merge_command(ffmpeg, listing, out, req.mute), out, total, False, False)
+
+        def build(codec: str | None, _captions: str | None) -> list[str]:
+            prof = system.active()
+            return build_merge_command(ffmpeg, items, req, out, codec, prof.x264_preset, prof.threads)
+
         return self._submit(task, ffmpeg, build, out, total, req.format == "mp4", use_gpu)
 
-    def _submit(self, task: ExportTask, ffmpeg: str, build: Callable[[str | None], list[str]], out: Path, total: float, encodes: bool, use_gpu: bool) -> ExportTask:
+    def _submit(
+        self,
+        task: ExportTask,
+        ffmpeg: str,
+        build: Callable[[str | None, str | None], list[str]],
+        out: Path,
+        total: float,
+        encodes: bool,
+        use_gpu: bool,
+        prepare: Callable[[], str | None] | None = None,
+    ) -> ExportTask:
         with self._lock:
             self._tasks[task.id] = task
         self._save_task(task)
-        self._executor.submit(self._run, task.id, ffmpeg, build, out, total, encodes, use_gpu)
+        self._executor.submit(self._run, task.id, ffmpeg, build, out, total, encodes, use_gpu, prepare)
         return task.model_copy()
 
     def cancel(self, task_id: str) -> ExportTask | None:
@@ -710,6 +863,7 @@ class EditorManager:
                 stdout=subprocess.PIPE,
                 stderr=log_fh,
                 text=True,
+                cwd=log_path.parent,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             with self._lock:
@@ -729,22 +883,38 @@ class EditorManager:
                     self._update(task_id, progress=min(0.99, done / total), speed=speed, eta=eta)
             return proc.wait()
 
-    def _run(self, task_id: str, ffmpeg: str, build: Callable[[str | None], list[str]], out: Path, total: float, encodes: bool, use_gpu: bool) -> None:
+    def _run(
+        self,
+        task_id: str,
+        ffmpeg: str,
+        build: Callable[[str | None, str | None], list[str]],
+        out: Path,
+        total: float,
+        encodes: bool,
+        use_gpu: bool,
+        prepare: Callable[[], str | None] | None = None,
+    ) -> None:
         folder = self._exp_dir(task_id)
+        folder.mkdir(parents=True, exist_ok=True)
         log_path = folder / "ffmpeg.log"
         enc = gpu.detect(ffmpeg).encoder if encodes and use_gpu else None
         if task_id in self._cancel:
             self._cancel.discard(task_id)
             (folder / "clips.ffconcat").unlink(missing_ok=True)
             return
-        self._update(task_id, persist=True, status="running", progress=0.0, encoder=_encoder_label(encodes, enc))
         try:
-            code = self._exec(task_id, build(enc.codec if enc else None), total, log_path)
-            if code != 0 and enc is not None and task_id not in self._cancel:
-                log.warning("Export %s: %s encode failed, retrying on the CPU", task_id, enc.name)
-                self._update(task_id, persist=True, progress=0.0, speed=None, eta=None, encoder="CPU · x264 (GPU failed)")
-                out.unlink(missing_ok=True)
-                code = self._exec(task_id, build(None), total, log_path)
+            # Encoding and Whisper share one CPU budget, so a weak machine runs them one after another.
+            with system.heavy.slot(lambda: self._update(task_id, stage="Waiting for another transcription or export to finish…")):
+                if task_id in self._cancel:
+                    raise InterruptedError
+                self._update(task_id, persist=True, status="running", progress=0.0, stage=None, encoder=_encoder_label(encodes, enc))
+                captions_file = prepare() if prepare else None
+                code = self._exec(task_id, build(enc.codec if enc else None, captions_file), total, log_path)
+                if code != 0 and enc is not None and task_id not in self._cancel:
+                    log.warning("Export %s: %s encode failed, retrying on the CPU", task_id, enc.name)
+                    self._update(task_id, persist=True, progress=0.0, speed=None, eta=None, encoder="CPU · x264 (GPU failed)")
+                    out.unlink(missing_ok=True)
+                    code = self._exec(task_id, build(None, captions_file), total, log_path)
             if task_id in self._cancel:
                 raise InterruptedError
             if code != 0 or not out.is_file():
@@ -763,10 +933,11 @@ class EditorManager:
             self._update(
                 task_id, persist=True, status="cancelled" if cancelled else "error",
                 error=None if cancelled else (str(err) or type(err).__name__)[:400],
-                speed=None, eta=None, finished_at=now_iso(),
+                speed=None, eta=None, stage=None, finished_at=now_iso(),
             )
         finally:
             with self._lock:
                 self._procs.pop(task_id, None)
             self._cancel.discard(task_id)
             (folder / "clips.ffconcat").unlink(missing_ok=True)
+            (folder / CAPTIONS_FILE).unlink(missing_ok=True)

@@ -52,6 +52,7 @@ export interface Clip {
   tags: string[];
   reasons: Reason[];
   breakdown: Contribution[];
+  review?: "approved" | "rejected" | null;
 }
 
 export interface Chapter {
@@ -148,13 +149,14 @@ export interface Job {
   id: string;
   kind: string;
   title: string;
-  status: "queued" | "running" | "done" | "error";
+  status: "queued" | "running" | "done" | "error" | "interrupted";
   progress: number;
   stage: string;
   stages: { name: string; at: string }[];
   error: string | null;
   result_id: string | null;
   created_at: string;
+  retryable?: boolean;
 }
 
 export interface AISettings {
@@ -200,6 +202,10 @@ export interface Settings {
   youtube_api_key: string;
   proxy: string;
   gpu_acceleration: boolean;
+  performance: "auto" | PerformanceName;
+  focused_transcription: "auto" | "on" | "off";
+  cleanup_days: number;
+  cache_limit_gb: number;
   has_youtube_api_key?: boolean;
   ai: AISettings;
   weights: Weights;
@@ -217,7 +223,51 @@ export interface Health {
     ai_model: string | null;
     youtube_api_key: boolean;
     local_path: boolean;
+    performance?: PerformanceName;
+    performance_auto?: boolean;
   };
+}
+
+export type PerformanceName = "low" | "balanced" | "high";
+
+export interface PerformanceProfile {
+  name: PerformanceName;
+  heavy_slots: number;
+  threads: number;
+  whisper_model: string | null;
+  visual_analysis: string | null;
+  x264_preset: string;
+  chunk_sec: number;
+  focused_over_sec: number | null;
+}
+
+export interface SystemInfo {
+  cpus: number;
+  ram_gb: number | null;
+  available_ram_gb: number | null;
+  recommended: PerformanceName;
+  setting: "auto" | PerformanceName;
+  active: PerformanceProfile;
+  busy: number;
+  profiles: Record<PerformanceName, PerformanceProfile>;
+}
+
+export interface StorageUsage {
+  categories: { key: string; label: string; bytes: number; files: number; auto_cleanup: boolean }[];
+  total_bytes: number;
+  disk_free_bytes: number;
+  disk_total_bytes: number;
+  cleanup_days: number;
+  cache_limit_gb: number;
+  data_dir: string;
+}
+
+export interface DiagnosticCheck {
+  key: string;
+  label: string;
+  status: "ok" | "warn" | "fail" | "info";
+  detail: string;
+  hint: string | null;
 }
 
 export interface CheckResult {
@@ -285,7 +335,7 @@ export interface DownloadTask {
 export interface EditSource {
   id: string;
   name: string;
-  kind: "upload" | "download";
+  kind: "upload" | "download" | "analysis";
   download_id: string | null;
   duration: number;
   has_video: boolean;
@@ -321,7 +371,41 @@ export interface ExportRequest {
   format: ExportFormat;
   quality: "high" | "balanced" | "small";
   fast: boolean;
+  normalize?: boolean;
+  captions?: CaptionOptions | null;
+  title?: string | null;
 }
+
+export type CaptionStyle = "bold" | "classic" | "boxed";
+
+export interface CaptionOptions {
+  style: CaptionStyle;
+  position: "bottom" | "center";
+  analysis_id?: string | null;
+  analysis_source?: string | null;
+}
+
+export interface ExportBatch {
+  id: string;
+  analysis_id: string;
+  status: "preparing" | "done" | "error";
+  stage: string;
+  total: number;
+  export_ids: string[];
+  errors: string[];
+  created_at: string;
+}
+
+export interface BatchOptions {
+  clip_ids: string[];
+  download_quality: number;
+  frame: "original" | "9:16" | "1:1";
+  captions: "off" | CaptionStyle;
+  normalize: boolean;
+  quality: "high" | "balanced" | "small";
+}
+
+export type EditSourceResult = { status: "ready"; source: EditSource } | { status: "downloading"; download: DownloadTask };
 
 export type MergeFrame = "first" | "16:9" | "9:16" | "1:1";
 
@@ -334,6 +418,7 @@ export interface MergeRequest {
   format: "mp4" | "mp3";
   quality: "high" | "balanced" | "small";
   fast: boolean;
+  normalize?: boolean;
 }
 
 export interface GpuStatus {
@@ -361,6 +446,7 @@ export interface ExportTask {
   label: string;
   format: string;
   encoder: string | null;
+  stage?: string | null;
   status: "queued" | "running" | "done" | "error" | "cancelled";
   progress: number;
   speed: number | null;

@@ -450,6 +450,7 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
   const [quality, setQuality] = useState<"high" | "balanced" | "small">("balanced");
   const [mute, setMute] = useState(false);
   const [fast, setFast] = useState(false);
+  const [normalize, setNormalize] = useState(false);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
@@ -553,7 +554,8 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
   const hasVideo = clips.some((c) => c.source.has_video);
   const hasAudio = clips.some((c) => c.source.has_audio);
   const fmt = hasVideo || clips.length === 0 ? format : "mp3";
-  const useFast = fast && fmt === "mp4";
+  const normalizeOn = normalize && hasAudio && !(fmt === "mp4" && mute);
+  const useFast = fast && fmt === "mp4" && !normalizeOn;
   const firstVideo = clips.find((c) => c.source.has_video)?.source;
   const canvas = firstVideo && fmt === "mp4" && !useFast ? mergeCanvas(firstVideo, frame, resolution) : null;
   const total = clips.reduce((sum, c) => sum + (c.end - c.start), 0);
@@ -587,6 +589,7 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
       format: fmt,
       quality,
       fast: useFast,
+      normalize: normalizeOn,
     };
     setBusy(true);
     try {
@@ -875,8 +878,20 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
           <ToolSection title="Options">
             <div className="space-y-4">
               {hasAudio && <Toggle checked={mute} onChange={setMute} label="Remove audio" />}
+              {hasAudio && !mute && (
+                <Toggle
+                  checked={normalizeOn}
+                  onChange={(v) => {
+                    setNormalize(v);
+                    if (v) setFast(false);
+                  }}
+                  label="Even out the volume"
+                  description="Levels the whole merge to −14 LUFS so a quiet clip next to a loud one is not jarring. Needs re-encoding."
+                />
+              )}
               <Toggle
                 checked={useFast}
+                disabled={normalizeOn}
                 onChange={setFast}
                 label={
                   <span className="inline-flex items-center gap-1.5">
@@ -884,12 +899,20 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
                   </span>
                 }
                 description={
-                  fastMismatch
+                  normalizeOn
+                    ? "Turn off “Even out the volume” to join without re-encoding."
+                    : fastMismatch
                     ? "These clips differ in size, frame rate or format, so a fast merge would be refused. Leave it off to re-encode."
                     : "No re-encoding: instant and keeps the original quality. Needs clips in the same format (e.g. parts of one video). Cuts snap to keyframes."
                 }
               />
             </div>
+          </ToolSection>
+        )}
+
+        {fmt === "mp3" && hasAudio && (
+          <ToolSection title="Options">
+            <Toggle checked={normalizeOn} onChange={setNormalize} label="Even out the volume" description="Levels the whole merge to −14 LUFS." />
           </ToolSection>
         )}
 
@@ -926,6 +949,12 @@ export function MergeWorkspace({ seed, onStarted }: { seed: string | null; onSta
             <div className="flex justify-between gap-3">
               <span className="text-fg-3">Encoder</span>
               <span className="truncate font-medium text-fg">{encoderText(gpu)}</span>
+            </div>
+          )}
+          {normalizeOn && (
+            <div className="flex justify-between gap-3">
+              <span className="text-fg-3">Volume</span>
+              <span className="font-medium text-fg">Levelled to −14 LUFS</span>
             </div>
           )}
         </div>

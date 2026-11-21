@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Clock, Copy, Info, Link2, Play, Sparkles, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, Clock, Copy, Info, Link2, Play, Scissors, Sparkles, ThumbsDown, ThumbsUp, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { clipLink } from "../lib/exporters";
 import { cx, fmtDuration, fmtTime } from "../lib/format";
@@ -31,13 +31,19 @@ export function ClipCard({
   source,
   active,
   showSource,
+  reviewing,
   onPlay,
+  onEdit,
+  onReview,
 }: {
   clip: Clip;
   source: SourceVideo | undefined;
   active: boolean;
   showSource: boolean;
+  reviewing?: boolean;
   onPlay: () => void;
+  onEdit?: () => void;
+  onReview?: (review: "approved" | "rejected" | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const toast = useToast();
@@ -58,6 +64,7 @@ export function ClipCard({
       className={cx(
         "group relative overflow-hidden rounded-2xl border p-4 transition-all duration-200",
         active ? "border-accent/55 bg-ink-800" : "border-white/[0.07] bg-ink-850 hover:border-white/[0.13] hover:bg-ink-800",
+        clip.review === "rejected" && "opacity-55",
       )}
     >
       {active && <span className="absolute inset-y-0 left-0 w-[3px] bg-accent" />}
@@ -66,6 +73,16 @@ export function ClipCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-semibold tabular text-fg-3">#{clip.rank}</span>
+            {clip.review === "approved" && (
+              <Badge tone="pos" icon={<ThumbsUp className="size-3" />}>
+                Approved
+              </Badge>
+            )}
+            {clip.review === "rejected" && (
+              <Badge tone="neg" icon={<ThumbsDown className="size-3" />}>
+                Rejected
+              </Badge>
+            )}
             {clip.ai_score !== null && (
               <Badge tone="violet" icon={<Sparkles className="size-3" />}>
                 AI {Math.round(clip.ai_score)}
@@ -153,6 +170,31 @@ export function ClipCard({
         </div>
       )}
 
+      {reviewing && onReview && (
+        <div className="mt-3.5 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onReview(clip.review === "approved" ? null : "approved")}
+            className={cx(
+              "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium ring-1 transition",
+              clip.review === "approved" ? "bg-pos/20 text-pos ring-pos/40" : "bg-white/[0.04] text-fg-2 ring-white/[0.08] hover:bg-pos/10 hover:text-pos",
+            )}
+          >
+            <ThumbsUp className="size-4" /> Approve <kbd className="rounded bg-white/[0.08] px-1 text-[10.5px] text-fg-3">A</kbd>
+          </button>
+          <button
+            type="button"
+            onClick={() => onReview(clip.review === "rejected" ? null : "rejected")}
+            className={cx(
+              "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium ring-1 transition",
+              clip.review === "rejected" ? "bg-neg/20 text-neg ring-neg/40" : "bg-white/[0.04] text-fg-2 ring-white/[0.08] hover:bg-neg/10 hover:text-neg",
+            )}
+          >
+            <ThumbsDown className="size-4" /> Reject <kbd className="rounded bg-white/[0.08] px-1 text-[10.5px] text-fg-3">X</kbd>
+          </button>
+        </div>
+      )}
+
       <div className="mt-3.5 flex items-center gap-1">
         <button
           type="button"
@@ -161,6 +203,15 @@ export function ClipCard({
         >
           <Play className="size-3.5 fill-current" /> Play clip
         </button>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12.5px] font-medium text-fg-2 ring-1 ring-white/[0.08] transition hover:bg-white/[0.06] hover:text-fg"
+          >
+            <Scissors className="size-3.5" /> Edit & export
+          </button>
+        )}
         {link && (
           <IconButton label="Copy YouTube link at this moment" onClick={() => copy(link, "Link")}>
             <Link2 className="size-4" />

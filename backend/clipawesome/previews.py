@@ -12,6 +12,7 @@ from typing import Any, Literal
 import yt_dlp
 from pydantic import BaseModel
 
+from . import system
 from .config import data_path
 from .downloads import DownloadManager, ffmpeg_path
 from .editor import make_preview_audio
@@ -90,6 +91,10 @@ class PreviewManager:
         current = self.status(video_id)
         if current.status in ("ready", "downloading"):
             return current
+        try:
+            system.require_space(self.root, 300 * system.MB, "a playback copy of this video")
+        except OSError as err:
+            return PreviewStatus(video_id=video_id, status="error", error=str(err))
         with self._lock:
             running = self._jobs.get(video_id)
             if running and running.status == "downloading":  # another request started it meanwhile
@@ -97,6 +102,10 @@ class PreviewManager:
             job = self._jobs[video_id] = PreviewStatus(video_id=video_id, status="downloading")
         self._executor.submit(self._run, video_id)
         return job.model_copy()
+
+    def busy(self) -> set[str]:
+        with self._lock:
+            return {vid for vid, job in self._jobs.items() if job.status == "downloading"}
 
     def audio(self, video_id: str) -> Path | None:
         path = self.file(video_id)

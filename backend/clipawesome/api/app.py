@@ -4,9 +4,14 @@ import base64
 import binascii
 import logging
 import secrets
+import subprocess
 from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from yt_dlp import version as yt_dlp_version
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,11 +19,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from .. import __version__, gpu, pipeline
+from .. import __version__, gpu, pipeline, system
+from .. import clipexport as ce
 from .. import config as cfg
 from .. import downloads as dl
 from .. import editor as ed
 from .. import previews as pv
+from .. import storage as st
 from ..ai.llm import LLMClient, LLMError
 from ..config import PROVIDER_DEFAULTS, WEB_DIST, AISettings, Settings, SettingsStore, _merge_secret, ensure_dirs, public_settings
 from ..jobs import JobManager
@@ -38,12 +45,29 @@ jobs = JobManager(store)
 downloads = dl.DownloadManager()
 editor = ed.EditorManager()
 yt_previews = pv.PreviewManager(downloads)
+storage = st.Storage(settings_store, editor, yt_previews)
+clip_exports = ce.ClipExporter(store, downloads, editor)
+
+
+def _whisper_opts(settings: Settings) -> dict[str, Any]:
+    prof = system.configure(settings.performance)
+    return {
+        "model_size": prof.whisper_model or settings.whisper_model,
+        "device": settings.whisper_device,
+        "compute_type": settings.whisper_compute_type,
+        "threads": prof.threads,
+        "workers": prof.heavy_slots,
+        "chunk_sec": prof.chunk_sec,
+    }
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_dirs()
-    youtube.configure_proxy(settings_store.load().proxy)
+    settings = settings_store.load()
+    youtube.configure_proxy(settings.proxy)
+    system.configure(settings.performance)
+    storage.startup_cleanup()
     yield
 
 
@@ -51,7 +75,7 @@ app = FastAPI(title="ClipAwesome", version=__version__, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -119,6 +143,8 @@ def health() -> dict[str, Any]:
             "ai_model": settings.ai.resolved_model() or None,
             "youtube_api_key": bool(settings.youtube_api_key),
             "local_path": cfg.ALLOW_LOCAL_PATH,
+            "performance": system.configure(settings.performance).name,
+            "performance_auto": settings.performance == "auto",
         },
     }
 
@@ -141,6 +167,7 @@ def put_settings(body: dict[str, Any]) -> dict[str, Any]:
         first = err.errors()[0]
         raise HTTPException(422, f"Invalid setting {'.'.join(map(str, first['loc']))}: {first['msg']}") from err
     youtube.configure_proxy(updated.proxy)
+    system.configure(updated.performance)
     return public_settings(updated)
 
 
@@ -151,7 +178,7 @@ def network_youtube(body: dict[str, Any] | None = None) -> dict[str, Any]:
     proxy = (body or {}).get("proxy")
     if proxy is not None:
         try:
-            proxy = Settings(proxy=str(proxy)).proxy
+            proxy = Settings(proxy=cfg.merge_proxy(str(proxy).strip(), configured)).proxy
         except ValidationError as err:
             raise HTTPException(422, err.errors()[0]["msg"]) from err
     youtube.configure_proxy(proxy if proxy is not None else configured)
@@ -165,6 +192,104 @@ def network_youtube(body: dict[str, Any] | None = None) -> dict[str, Any]:
 @app.get("/api/ai/providers")
 def ai_providers() -> dict[str, Any]:
     return {name: {"base_url": url, "model": model} for name, (url, model) in PROVIDER_DEFAULTS.items()}
+
+
+@app.get("/api/system")
+def system_info() -> dict[str, Any]:
+    system.configure(settings_store.load().performance)
+    return {**system.describe(), "profiles": {name: asdict(system.profile(name)) for name in ("low", "balanced", "high")}}
+
+
+@app.get("/api/storage")
+def storage_usage() -> dict[str, Any]:
+    return storage.usage()
+
+
+@app.post("/api/storage/cleanup")
+def storage_cleanup() -> dict[str, Any]:
+    result = storage.cleanup(everything=True)
+    return {**result, "usage": storage.usage()}
+
+
+def _check(checks: list[dict[str, Any]], key: str, label: str, status: str, detail: str, hint: str | None = None) -> None:
+    checks.append({"key": key, "label": label, "status": status, "detail": detail, "hint": hint})
+
+
+@app.get("/api/diagnostics")
+def diagnostics() -> dict[str, Any]:
+    """One-click self-test of everything the app depends on, with a fix hint for each problem."""
+    s = settings_store.load()
+    prof = system.configure(s.performance)
+    checks: list[dict[str, Any]] = []
+
+    ffmpeg = dl.ffmpeg_path()
+    if ffmpeg:
+        version = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, timeout=20, creationflags=gpu.NO_WINDOW).stdout.split("\n")[0]
+        _check(checks, "ffmpeg", "FFmpeg", "ok", version[:120])
+    else:
+        _check(checks, "ffmpeg", "FFmpeg", "fail", "Not found: downloads, exports and merges won't work.", 'Reinstall the backend: pip install -e ".[transcribe]"')
+
+    if not s.gpu_acceleration:
+        _check(checks, "gpu", "GPU encoding", "info", "Turned off in Settings, so exports use the CPU.")
+    elif ffmpeg:
+        enc = gpu.detect(ffmpeg).encoder
+        if enc:
+            _check(checks, "gpu", "GPU encoding", "ok", f"{enc.name} ({enc.codec}) works.")
+        else:
+            _check(checks, "gpu", "GPU encoding", "info", "No usable GPU encoder, so exports use the CPU (x264).")
+
+    model = prof.whisper_model or s.whisper_model
+    if transcribe.available():
+        cached = any(cfg.data_path("models").glob(f"models--*whisper-{model}"))
+        if cached:
+            _check(checks, "whisper", "Speech-to-text", "ok", f"faster-whisper ready with the '{model}' model.")
+        else:
+            _check(checks, "whisper", "Speech-to-text", "warn", f"The '{model}' model isn't downloaded yet; it downloads on first use (needs internet).")
+    else:
+        _check(checks, "whisper", "Speech-to-text", "warn", "Not installed: videos without captions can't be transcribed.", 'pip install -e ".[transcribe]"')
+
+    yv = yt_dlp_version.__version__
+    try:
+        age = (datetime.now() - datetime.strptime(".".join(yv.split(".")[:3]), "%Y.%m.%d")).days
+    except ValueError:
+        age = 0
+    if age > 60:
+        _check(checks, "ytdlp", "yt-dlp", "warn", f"Version {yv} is {age} days old. YouTube changes often, so old versions break.", "pip install -U yt-dlp, then restart the server")
+    else:
+        _check(checks, "ytdlp", "yt-dlp", "ok", f"Version {yv}.")
+    js = youtube.js_runtime()
+    _check(checks, "js", "JavaScript runtime", "ok" if js else "warn", f"{js} found." if js else "None found: some YouTube videos may fail to load.", None if js else "Install Node.js or Deno")
+
+    ok, message = youtube.check_reachable()
+    _check(checks, "youtube", "YouTube access", "ok" if ok else "fail", message, None if ok else "Set a proxy in Settings → YouTube & network")
+
+    if s.ai.is_configured():
+        _check(checks, "ai", "AI provider", "info", f"Configured: {s.ai.provider} · {s.ai.resolved_model()} (use Test connection to check it).")
+    else:
+        _check(checks, "ai", "AI provider", "info", "Not configured (optional; Deterministic mode works without it).")
+
+    free = system.free_bytes(cfg.DATA_DIR)
+    disk_status = "fail" if free < system.GB else "warn" if free < 5 * system.GB else "ok"
+    _check(checks, "disk", "Free disk space", disk_status, f"{system.fmt_bytes(free)} free where data is stored.", None if disk_status == "ok" else "Use Settings → Storage → Clean up, or free space on that drive")
+
+    info = system.describe()
+    ram = f"{info['ram_gb']} GB RAM" if info["ram_gb"] else "RAM unknown"
+    low_ram = info["available_ram_gb"] is not None and info["available_ram_gb"] < 1.5
+    _check(
+        checks, "machine", "Machine", "warn" if low_ram else "ok",
+        f"{info['cpus']} CPU threads · {ram} ({info['available_ram_gb']} GB free) · performance profile: {prof.name}" + (" (auto)" if s.performance == "auto" else ""),
+        "Close other apps, or switch Settings → Performance to Low" if low_ram else None,
+    )
+
+    try:
+        probe_file = cfg.data_path("tmp", f"write-test-{secrets.token_hex(4)}")
+        probe_file.parent.mkdir(parents=True, exist_ok=True)
+        probe_file.write_text("ok")
+        probe_file.unlink()
+        _check(checks, "data", "Data folder", "ok", f"Writable: {cfg.DATA_DIR}")
+    except OSError as err:
+        _check(checks, "data", "Data folder", "fail", f"Can't write to {cfg.DATA_DIR}: {err}", "Fix the folder permissions or set CLIPAWESOME_DATA")
+    return {"ok": all(c["status"] != "fail" for c in checks), "checks": checks}
 
 
 @app.post("/api/ai/test")
@@ -188,6 +313,44 @@ def ai_models(body: dict[str, Any] | None = None) -> dict[str, Any]:
 # ---- analysis jobs -------------------------------------------------------------------------------
 
 
+def _job_runner(spec: dict[str, Any]):
+    """Builds the pipeline call for a saved job spec, so jobs can be re-run after a failure or restart."""
+    settings = settings_store.load()
+    kind = spec["kind"]
+    if kind == "youtube":
+        req = YouTubeRequest.model_validate(spec["request"])
+        _require_mode(req, settings)
+        video_id = youtube.parse_video_id(req.url) or req.url
+        return lambda p: pipeline.analyze_youtube(video_id, req, settings, p)
+    if kind == "discover":
+        disc = DiscoverRequest.model_validate(spec["request"])
+        _require_mode(disc, settings)
+        return lambda p: pipeline.discover(disc, settings, p)
+    opts = AnalyzeOptions.model_validate(spec["request"])
+    _require_mode(opts, settings)
+    path = Path(spec["path"])
+    sub = Path(spec["subtitle"]) if spec.get("subtitle") else None
+    if not path.is_file():
+        raise HTTPException(410, "The original file is no longer available. Upload it again.")
+    return lambda p: pipeline.analyze_local(path, spec["name"], spec["media_id"], sub, opts, settings, p)
+
+
+def _start_job(kind: str, title: str, spec: dict[str, Any]) -> Job:
+    return jobs.submit(kind, title, _job_runner(spec), spec)
+
+
+@app.post("/api/jobs/{job_id}/retry", status_code=202)
+def retry_job(job_id: str) -> dict[str, str]:
+    job, spec = jobs.get(job_id), jobs.spec(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    if job.status in ("queued", "running"):
+        raise HTTPException(409, "This job is still running")
+    if spec is None:
+        raise HTTPException(409, "This job can't be run again; start a new analysis instead")
+    return {"job_id": _start_job(job.kind, job.title, spec).id}
+
+
 @app.post("/api/analyze/youtube", status_code=202)
 def analyze_youtube(req: YouTubeRequest) -> dict[str, str]:
     settings = settings_store.load()
@@ -195,7 +358,7 @@ def analyze_youtube(req: YouTubeRequest) -> dict[str, str]:
     video_id = youtube.parse_video_id(req.url)
     if not video_id:
         raise HTTPException(400, "Enter a YouTube video link (youtube.com/watch?v=…, youtu.be/…, /shorts/…) or an 11-character video ID.")
-    job = jobs.submit("youtube", req.url, lambda p: pipeline.analyze_youtube(video_id, req, settings, p))
+    job = _start_job("youtube", req.url, {"kind": "youtube", "request": req.model_dump()})
     return {"job_id": job.id}
 
 
@@ -241,9 +404,8 @@ async def analyze_local_upload(
         sub_path = store.uploads / f"{media_id}.sub{sub_ext}"
         await _save_upload(subtitle, sub_path)
     store.register_media(media_path, "upload", media_id)
-    job = jobs.submit(
-        "local", name, lambda p: pipeline.analyze_local(media_path, name, media_id, sub_path, opts, settings, p)
-    )
+    spec = {"kind": "local", "request": opts.model_dump(), "path": str(media_path), "name": name, "media_id": media_id, "subtitle": str(sub_path) if sub_path else None}
+    job = _start_job("local", name, spec)
     return {"job_id": job.id}
 
 
@@ -264,9 +426,9 @@ def analyze_local_path(req: LocalPathRequest) -> dict[str, str]:
         if not sub_path.is_file() or sub_path.suffix.lower() not in SUBTITLE_EXTS:
             raise HTTPException(400, "Subtitle path must be an existing .srt or .vtt file")
     media_id = store.register_media(path.resolve(), "path")
-    job = jobs.submit(
-        "local", path.name, lambda p: pipeline.analyze_local(path, path.name, media_id, sub_path, req, settings, p)
-    )
+    opts = AnalyzeOptions.model_validate(req.model_dump(include=set(AnalyzeOptions.model_fields)))
+    spec = {"kind": "local", "request": opts.model_dump(), "path": str(path), "name": path.name, "media_id": media_id, "subtitle": str(sub_path) if sub_path else None}
+    job = _start_job("local", path.name, spec)
     return {"job_id": job.id}
 
 
@@ -276,7 +438,7 @@ def discover(req: DiscoverRequest) -> dict[str, str]:
     _require_mode(req, settings)
     if req.min_duration >= req.max_duration:
         raise HTTPException(400, "Minimum duration must be below maximum duration")
-    job = jobs.submit("discover", req.topic, lambda p: pipeline.discover(req, settings, p))
+    job = _start_job("discover", req.topic, {"kind": "discover", "request": req.model_dump()})
     return {"job_id": job.id}
 
 
@@ -307,6 +469,55 @@ def get_analysis(analysis_id: str) -> Analysis:
     if analysis is None:
         raise HTTPException(404, "Analysis not found")
     return analysis
+
+
+@app.patch("/api/analyses/{analysis_id}/clips/{clip_id}")
+def review_clip(analysis_id: str, clip_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    review = body.get("review")
+    if review not in ("approved", "rejected", None):
+        raise HTTPException(422, "review must be 'approved', 'rejected' or null")
+    analysis = store.set_review(analysis_id, clip_id, review)
+    if analysis is None:
+        raise HTTPException(404, "Clip not found")
+    return {"id": clip_id, "review": review}
+
+
+def _analysis_or_404(analysis_id: str) -> Analysis:
+    analysis = store.get(analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "Analysis not found")
+    return analysis
+
+
+@app.post("/api/analyses/{analysis_id}/sources/{source_id}/edit-source")
+def analysis_edit_source(analysis_id: str, source_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Editable copy of an analysed video: ready now, or a download to wait for (poll /api/downloads/{id})."""
+    quality = int((body or {}).get("quality") or 720)
+    if quality not in ce.QUALITIES:
+        raise HTTPException(422, f"quality must be one of {ce.QUALITIES}")
+    try:
+        return clip_exports.ensure_source(_analysis_or_404(analysis_id), source_id, quality)
+    except (ed.EditError, youtube.SourceError, OSError) as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@app.post("/api/analyses/{analysis_id}/export", status_code=202)
+def analysis_export(analysis_id: str, opts: ce.BatchOptions) -> ce.Batch:
+    if opts.download_quality not in ce.QUALITIES:
+        raise HTTPException(422, f"download_quality must be one of {ce.QUALITIES}")
+    settings = settings_store.load()
+    try:
+        return clip_exports.start_batch(_analysis_or_404(analysis_id), opts, settings.gpu_acceleration, _whisper_opts(settings) if transcribe.available() else None)
+    except ed.EditError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@app.get("/api/export-batches/{batch_id}")
+def export_batch(batch_id: str) -> ce.Batch:
+    batch = clip_exports.batch(batch_id)
+    if batch is None:
+        raise HTTPException(404, "Batch not found (the server may have restarted)")
+    return batch
 
 
 @app.delete("/api/analyses/{analysis_id}", status_code=204)
@@ -517,8 +728,16 @@ def editor_delete_source(source_id: str) -> Response:
 
 @app.post("/api/editor/exports", status_code=202)
 def editor_start_export(req: ed.ExportRequest) -> ed.ExportTask:
+    settings = settings_store.load()
+    lines = None
+    if req.captions and req.captions.analysis_id:
+        analysis = store.get(req.captions.analysis_id)
+        if analysis is None:
+            raise HTTPException(400, "The analysis used for captions no longer exists")
+        sid = req.captions.analysis_source or (analysis.sources[0].id if analysis.sources else "")
+        lines = [(t.start, t.end, t.text) for t in analysis.transcripts.get(sid, [])]
     try:
-        return editor.start(req, use_gpu=settings_store.load().gpu_acceleration)
+        return editor.start(req, settings.gpu_acceleration, caption_lines=lines, whisper=_whisper_opts(settings) if transcribe.available() else None)
     except ed.EditError as err:
         raise HTTPException(400, str(err)) from err
 

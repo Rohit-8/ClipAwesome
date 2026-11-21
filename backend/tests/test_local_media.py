@@ -79,7 +79,7 @@ def test_analyze_local_without_transcript(media, monkeypatch):
     monkeypatch.setattr(transcribe, "available", lambda: False)
     stages: list[str] = []
     analysis = pipeline.analyze_local(
-        media, "sample.mkv", "m_" + "0" * 16, None, AnalyzeOptions(preset="shorts", max_clips=2), Settings(), lambda s, f: stages.append(s)
+        media, "sample.mkv", "m_" + "0" * 16, None, AnalyzeOptions(preset="shorts", max_clips=2), Settings(performance="balanced"), lambda s, f: stages.append(s)
     )
     assert analysis.kind == "local" and analysis.clips
     assert analysis.sources[0].media_kind == "video"

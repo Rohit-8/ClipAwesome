@@ -5,6 +5,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -39,7 +40,7 @@ def data_path(*parts: str) -> Path:
 
 
 def ensure_dirs() -> None:
-    for sub in ("analyses", "uploads", "models", "tmp", "downloads"):
+    for sub in ("analyses", "uploads", "models", "tmp", "downloads", "jobs"):
         data_path(sub).mkdir(parents=True, exist_ok=True)
 
 
@@ -94,6 +95,10 @@ class Settings(BaseModel):
     youtube_api_key: str = ""
     proxy: str = ""
     gpu_acceleration: bool = True
+    performance: Literal["auto", "low", "balanced", "high"] = "auto"
+    focused_transcription: Literal["auto", "on", "off"] = "auto"
+    cleanup_days: int = Field(14, ge=0, le=365)
+    cache_limit_gb: float = Field(5, ge=0, le=1000)
     ai: AISettings = Field(default_factory=AISettings)
     weights: ScoringWeights = Field(default_factory=ScoringWeights)
 
@@ -118,6 +123,36 @@ def _merge_secret(incoming: Any, current: str) -> str:
     if not isinstance(incoming, str) or not incoming or incoming.startswith(MASK):
         return current
     return incoming.strip()
+
+
+def _split_auth(url: str) -> tuple[str, str, str, str] | None:
+    """(scheme+'://', user, password, host[:port]...) for a proxy URL with credentials."""
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return None
+    userinfo, host = parts.netloc.rsplit("@", 1)
+    user, _, password = userinfo.partition(":")
+    return parts.scheme, user, password, host
+
+
+def mask_proxy(url: str) -> str:
+    auth = _split_auth(url)
+    if not auth or not auth[2]:
+        return url
+    scheme, user, _, host = auth
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=f"{user}:{MASK}@{host}"))
+
+
+def merge_proxy(incoming: str, current: str) -> str:
+    """A masked password coming back from the UI means “keep the saved one”."""
+    inc, cur = _split_auth(incoming), _split_auth(current)
+    if not inc or inc[2] != MASK:
+        return incoming
+    if not cur or (inc[1], inc[3]) != (cur[1], cur[3]):
+        return incoming.replace(f":{MASK}@", "@")
+    parts = urlsplit(incoming)
+    return urlunsplit(parts._replace(netloc=f"{inc[1]}:{cur[2]}@{inc[3]}"))
 
 
 class SettingsStore:
@@ -151,6 +186,8 @@ class SettingsStore:
                 merged[key] = value
         merged["youtube_api_key"] = _merge_secret(incoming.get("youtube_api_key"), current.youtube_api_key)
         merged["ai"]["api_key"] = _merge_secret((incoming.get("ai") or {}).get("api_key"), current.ai.api_key)
+        if isinstance(incoming.get("proxy"), str):
+            merged["proxy"] = merge_proxy(incoming["proxy"].strip(), current.proxy)
         updated = Settings.model_validate(merged)
         self.save(updated)
         return updated
@@ -160,6 +197,7 @@ def public_settings(settings: Settings) -> dict[str, Any]:
     data = settings.model_dump()
     data["youtube_api_key"] = _mask(settings.youtube_api_key)
     data["ai"]["api_key"] = _mask(settings.ai.api_key)
+    data["proxy"] = mask_proxy(settings.proxy)
     data["has_youtube_api_key"] = bool(settings.youtube_api_key)
     data["ai"]["has_api_key"] = bool(settings.ai.api_key)
     data["ai"]["configured"] = settings.ai.is_configured()

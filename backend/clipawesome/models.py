@@ -68,6 +68,7 @@ class ClipSuggestion(BaseModel):
     tags: list[str] = []
     reasons: list[Reason] = []
     breakdown: list[Contribution] = []
+    review: Literal["approved", "rejected"] | None = None
 
 
 class Chapter(BaseModel):
@@ -163,10 +164,11 @@ class Job(BaseModel):
     id: str
     kind: str
     title: str = ""
-    status: Literal["queued", "running", "done", "error"] = "queued"
+    status: Literal["queued", "running", "done", "error", "interrupted"] = "queued"
     progress: float = 0.0
     stage: str = "Queued"
     stages: list[JobStage] = []
     error: str | None = None
     result_id: str | None = None
     created_at: str
+    retryable: bool = False

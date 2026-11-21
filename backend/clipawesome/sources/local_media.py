@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import itertools
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,38 +53,71 @@ def probe(path: Path) -> MediaInfo:
         )
 
 
-def loudness(path: Path, hop: float = 0.5, duration: float | None = None, progress: Progress | None = None) -> np.ndarray | None:
-    """RMS loudness in dB for consecutive `hop`-second windows of mono 16 kHz audio."""
+def iter_pcm(path: Path, rate: int = 16000, start: float = 0.0, end: float | None = None) -> Iterator[np.ndarray]:
+    """Mono float32 PCM blocks from `start` to `end` seconds, decoded as a stream (memory stays flat)."""
+    with av.open(str(path)) as c:
+        if not c.streams.audio:
+            return
+        stream = c.streams.audio[0]
+        stream.thread_type = "AUTO"
+        if start > 0:
+            c.seek(int(start * av.time_base), backward=True)
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=rate)
+        pos: float | None = None
+        frames = (out for frame in c.decode(stream) for out in resampler.resample(frame))
+        for out in itertools.chain(frames, resampler.resample(None)):
+            pcm = out.to_ndarray().reshape(-1).astype(np.float32, copy=False)
+            if pos is None:
+                pos = float(out.time) if out.time is not None else start
+            block_start, pos = pos, pos + len(pcm) / rate
+            if pos <= start:
+                continue
+            if block_start < start:
+                pcm = pcm[int((start - block_start) * rate) :]
+                block_start = start
+            if end is not None and pos >= end:
+                keep = max(0, int((end - block_start) * rate))
+                if keep:
+                    yield pcm[:keep]
+                return
+            if len(pcm):
+                yield pcm
+
+
+def audio_scan(
+    path: Path,
+    hop: float = 0.5,
+    sink: Callable[[np.ndarray], None] | None = None,
+    duration: float | None = None,
+    progress: Progress | None = None,
+) -> np.ndarray | None:
+    """One decoding pass: RMS loudness in dB per `hop` seconds, while handing the 16 kHz PCM to `sink` (e.g. Whisper)."""
     rate = 16000
     hop_n = int(rate * hop)
     blocks: list[np.ndarray] = []
     leftover = np.zeros(0, dtype=np.float32)
-
-    def consume(frames: list) -> None:
-        nonlocal leftover
-        for f in frames:
-            buf = np.concatenate([leftover, f.to_ndarray().reshape(-1).astype(np.float32)])
-            k = len(buf) // hop_n
-            if k:
-                chunk = buf[: k * hop_n].reshape(k, hop_n)
-                blocks.append(np.sqrt(np.mean(chunk * chunk, axis=1)))
-            leftover = buf[k * hop_n :]
-
-    with av.open(str(path)) as c:
-        if not c.streams.audio:
-            return None
-        stream = c.streams.audio[0]
-        stream.thread_type = "AUTO"
-        resampler = av.AudioResampler(format="flt", layout="mono", rate=rate)
-        for idx, frame in enumerate(c.decode(stream)):
-            consume(resampler.resample(frame))
-            if progress and duration and idx % 400 == 0 and frame.time is not None:
-                progress(min(1.0, frame.time / duration))
-        consume(resampler.resample(None))
+    seen = 0
+    for pcm in iter_pcm(path, rate):
+        if sink is not None:
+            sink(pcm)
+        buf = np.concatenate([leftover, pcm]) if len(leftover) else pcm
+        k = len(buf) // hop_n
+        if k:
+            chunk = buf[: k * hop_n].reshape(k, hop_n)
+            blocks.append(np.sqrt(np.mean(chunk * chunk, axis=1)))
+        leftover = buf[k * hop_n :]
+        seen += len(pcm)
+        if progress and duration and seen % (rate * 30) < len(pcm):
+            progress(min(1.0, seen / rate / duration))
     if not blocks:
         return None
     rms = np.concatenate(blocks)
     return 20 * np.log10(rms + 1e-5)
+
+
+def loudness(path: Path, hop: float = 0.5, duration: float | None = None, progress: Progress | None = None) -> np.ndarray | None:
+    """RMS loudness in dB for consecutive `hop`-second windows of mono 16 kHz audio."""
+    return audio_scan(path, hop=hop, duration=duration, progress=progress)
 
 
 def decode_audio(path: Path, rate: int = 16000) -> np.ndarray:

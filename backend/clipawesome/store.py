@@ -66,6 +66,16 @@ class Store:
         items = [AnalysisSummary.model_validate(e) for e in read_json(self.index_path, [])]
         return sorted(items, key=lambda s: s.created_at, reverse=True)
 
+    def set_review(self, analysis_id: str, clip_id: str, review: str | None) -> Analysis | None:
+        with self._lock:
+            analysis = self.get(analysis_id)
+            clip = next((c for c in analysis.clips if c.id == clip_id), None) if analysis else None
+            if analysis is None or clip is None:
+                return None
+            clip.review = review  # type: ignore[assignment]
+            (self.analyses / f"{analysis.id}.json").write_text(analysis.model_dump_json(), encoding="utf-8")
+            return analysis
+
     def delete(self, analysis_id: str) -> bool:
         analysis = self.get(analysis_id)
         if analysis is None:
