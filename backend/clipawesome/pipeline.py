@@ -137,7 +137,16 @@ def _whisper(path: Path, settings: Settings, duration: float, progress: Progress
 
 def youtube_source(video_id: str, sid: str, plan: Plan, settings: Settings, progress: Progress, warnings: list[str]) -> tuple[SourceVideo, SourceSignals]:
     progress("Reading video metadata", 0.02)
-    info = youtube.fetch_info(video_id, plan.include_comments, settings.max_comments)
+    want_comments = plan.include_comments
+    try:
+        info = youtube.fetch_info(video_id, want_comments, settings.max_comments)
+    except SourceError as err:
+        if not want_comments:
+            raise
+        # Comment paging makes many requests; one blocked page fails the whole extraction.
+        info = youtube.fetch_info(video_id)
+        want_comments = False
+        warnings.append(f"Comments skipped: {err}")
     duration = float(info.get("duration") or 0)
     if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
         raise SourceError("Live or upcoming streams can't be analysed until the broadcast has ended")
@@ -176,7 +185,7 @@ def youtube_source(video_id: str, sid: str, plan: Plan, settings: Settings, prog
 
     comments = info.get("comments") or []
     marks = youtube.comment_marks(comments, duration)
-    if plan.include_comments and not comments:
+    if want_comments and not comments:
         warnings.append("No comments were available to mine for timestamps")
 
     audio_db = None
@@ -402,6 +411,7 @@ def discover(req: DiscoverRequest, settings: Settings, progress: Progress) -> An
 
     targets = ranked[: req.analyze_top]
     results: list[SourceResult] = []
+    errors: list[str] = []
     span = 0.85 / len(targets)
     for idx, cand in enumerate(targets):
         lo = 0.12 + idx * span
@@ -418,9 +428,11 @@ def discover(req: DiscoverRequest, settings: Settings, progress: Progress) -> An
             cand.analyzed = True
         except Exception as err:
             local_warnings.append(f"skipped: {err}")
+            errors.append(str(err))
         warnings.extend(f"{label} — {w}" for w in local_warnings)
     if not results:
-        raise SourceError("None of the top videos could be analysed. Check warnings and try again.")
+        # Warnings are lost when the job fails, so surface the reason directly.
+        raise SourceError(f"None of the top videos could be analysed. {errors[-1] if errors else ''}".strip())
 
     merged: list[ClipSuggestion] = []
     for r in results:

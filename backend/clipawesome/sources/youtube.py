@@ -8,7 +8,7 @@ import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yt_dlp
 
@@ -23,6 +23,9 @@ _URL_PATTERNS = (
 )
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _proxy: str | None = None
+_BLOCKED_MARKERS = ("not a bot", "http error 429")
+PROXY_ATTEMPTS = 4
+T = TypeVar("T")
 
 
 class SourceError(RuntimeError):
@@ -36,6 +39,19 @@ def configure_proxy(url: str | None) -> None:
 
 def current_proxy() -> str | None:
     return _proxy
+
+
+def retry_blocked(fn: Callable[[], T]) -> T:
+    # Rotating proxies hand each new connection a fresh IP, so YouTube's per-IP bot check / rate limit often passes on retry.
+    attempts = PROXY_ATTEMPTS if _proxy else 1
+    attempt = 1
+    while True:
+        try:
+            return fn()
+        except Exception as err:
+            if attempt >= attempts or not any(m in str(err).lower() for m in _BLOCKED_MARKERS):
+                raise
+            attempt += 1
 
 
 def parse_video_id(value: str) -> str | None:
@@ -101,6 +117,10 @@ NETWORK_HINT = (
     "Could not connect to YouTube (the network may block it). "
     "If you are behind a firewall, set a proxy in Settings → Network."
 )
+BOT_CHECK_HINT = (
+    "YouTube asked to confirm this isn't a bot — it does this for many proxy, VPN and datacenter IPs. "
+    "Try again, or use a different (ideally residential) proxy."
+)
 
 
 def _clean_error(err: Exception) -> str:
@@ -108,6 +128,8 @@ def _clean_error(err: Exception) -> str:
     low = msg.lower()
     if any(k in low for k in ("handshake", "ssl", "timed out", "getaddrinfo", "connection refused", "connection reset")):
         return NETWORK_HINT
+    if "not a bot" in low:
+        return BOT_CHECK_HINT
     msg = re.sub(r"^\[youtube\]\s*[A-Za-z0-9_-]{11}:\s*", "", msg)
     return msg.split("\n")[0][:300]
 
@@ -130,10 +152,13 @@ def fetch_info(video_id: str, include_comments: bool = False, max_comments: int 
     if include_comments and max_comments > 0:
         opts["getcomments"] = True
         opts["extractor_args"] = {"youtube": {"max_comments": [str(max_comments), "all", "0"], "comment_sort": ["top"]}}
-    try:
+
+    def run() -> dict[str, Any]:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(watch_url(video_id), download=False)
-            return ydl.sanitize_info(info)
+            return ydl.sanitize_info(ydl.extract_info(watch_url(video_id), download=False))
+
+    try:
+        return retry_blocked(run)
     except yt_dlp.utils.DownloadError as err:
         raise SourceError(_clean_error(err)) from err
 
@@ -184,9 +209,12 @@ def pick_caption(info: dict[str, Any], prefer_langs: list[str]) -> CaptionTrack 
 
 
 def fetch_caption(track: CaptionTrack) -> str:
-    try:
+    def run() -> str:
         with yt_dlp.YoutubeDL(base_opts()) as ydl:
             return ydl.urlopen(track.url).read().decode("utf-8", errors="replace")
+
+    try:
+        return retry_blocked(run)
     except Exception as err:
         raise SourceError(_clean_error(err)) from err
 
@@ -233,11 +261,14 @@ def download_audio(video_id: str, dest: Path, progress: Callable[[float], None] 
             "progress_hooks": [hook],
         }
     )
-    try:
+    def run() -> Path:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(watch_url(video_id), download=True)
             downloads = info.get("requested_downloads") or []
-            path = Path(downloads[0]["filepath"]) if downloads and downloads[0].get("filepath") else Path(ydl.prepare_filename(info))
+            return Path(downloads[0]["filepath"]) if downloads and downloads[0].get("filepath") else Path(ydl.prepare_filename(info))
+
+    try:
+        path = retry_blocked(run)
     except yt_dlp.utils.DownloadError as err:
         raise SourceError(_clean_error(err)) from err
     if not path.exists():

@@ -493,8 +493,11 @@ class DownloadManager:
 
         self._update(task_id, persist=True, status="downloading", stage="Starting")
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                result = ydl.extract_info(info.url, download=True)
+            def run() -> dict:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    return ydl.extract_info(info.url, download=True)
+
+            result = youtube.retry_blocked(run)
             files = result.get("requested_downloads") or []
             path = Path(files[0]["filepath"]) if files and files[0].get("filepath") else None
             if path is None or not path.is_file():

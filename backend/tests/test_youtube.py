@@ -1,6 +1,7 @@
 import pytest
 
-from clipawesome.sources.youtube import comment_marks, parse_video_id, pick_caption
+from clipawesome.sources import youtube
+from clipawesome.sources.youtube import BOT_CHECK_HINT, _clean_error, comment_marks, parse_video_id, pick_caption, retry_blocked
 
 VID = "dQw4w9WgXcQ"
 
@@ -62,3 +63,38 @@ def test_pick_caption_prefers_manual_then_original_auto():
     assert picked.kind == "auto-captions" and picked.ext == "json3" and picked.lang == "en"
     info["automatic_captions"] = {}
     assert pick_caption(info, ["en"]) is None
+
+
+def _flaky(errors):
+    calls = []
+
+    def fn():
+        calls.append(1)
+        if len(calls) <= len(errors):
+            raise errors[len(calls) - 1]
+        return "ok"
+
+    return fn, calls
+
+
+def test_retry_blocked_retries_bot_check_only_with_proxy(monkeypatch):
+    bot = RuntimeError("Sign in to confirm you’re not a bot")
+    monkeypatch.setattr(youtube, "_proxy", "socks5://p:1")
+    fn, calls = _flaky([bot, RuntimeError("HTTP Error 429: Too Many Requests")])
+    assert retry_blocked(fn) == "ok" and len(calls) == 3
+
+    fn, calls = _flaky([RuntimeError("Video unavailable")])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        retry_blocked(fn)
+    assert len(calls) == 1
+
+    monkeypatch.setattr(youtube, "_proxy", None)
+    fn, calls = _flaky([bot])
+    with pytest.raises(RuntimeError):
+        retry_blocked(fn)
+    assert len(calls) == 1
+
+
+def test_clean_error_explains_bot_check():
+    err = RuntimeError("ERROR: [youtube] abcdefghijk: Sign in to confirm you’re not a bot. Use --cookies-from-browser")
+    assert _clean_error(err) == BOT_CHECK_HINT
